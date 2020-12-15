@@ -59,7 +59,6 @@ def test_simple_rebalance(node_factory):
 
     wait_for(no_pending_htlcs)
 
-    chan = l2.rpc.listpeers(l3.info['id'])['peers'][0]['channels'][0]
     assert(chan['spendable_msatoshi'] < amt)
 
     # Get (l2, l5) so we can exclude it when routing from l1 to l4
@@ -197,7 +196,7 @@ def test_payment(node_factory):
     """
 
     # Create two nodes
-    opts = [{}, {'plugin': plugin}, {}]
+    opts = [{}, {'plugin': plugin, 'jitrebalance-laplace-scale': 10000000000}, {}]
     alice, bob, charlie = node_factory.get_nodes(3, opts=opts)
 
     # Open Channels
@@ -218,6 +217,6 @@ def test_payment(node_factory):
         alice.rpc.pay(inv['bolt11'])
     except:
         pass
-    boblogs = bob.rpc.getlog('info')
-    print(json.dumps(boblogs, indent=4))
-    assert False, "dumb assert to make PyTest print my stuff"
+
+    assert bob.daemon.is_in_log(r'Going to fail the channel because forward_amt \d*msat is bigger than .\d*')
+    assert bob.daemon.is_in_log(r'Checking whether forward_amt \d*msat is bigger than \d*\. Real balance \d*msat\.')

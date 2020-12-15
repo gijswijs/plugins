@@ -1,5 +1,5 @@
 from pyln.testing.fixtures import *
-from pyln.testing.utils import wait_for
+from pyln.testing.utils import wait_for, DEVELOPER
 from channel_update import channelupdate
 import struct
 import zbase32
