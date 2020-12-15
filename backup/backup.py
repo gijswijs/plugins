@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import json
 import logging
 import os
+import re
 import struct
 import sys
 import sqlite3
@@ -94,17 +95,34 @@ class Backend(object):
             f.write(snapshot)
         self.db = self._db_open(dest)
 
+    def _rewrite_stmt(self, stmt: bytes) -> bytes:
+        """We had a stmt expansion bug in c-lightning, this replicates the fix.
+
+        We were expanding statements incorrectly, missing some
+        whitespace between a param and the `WHERE` keyword. This
+        re-inserts the space.
+
+        """
+        stmt = re.sub(r'reserved_til=([0-9]+)WHERE', r'reserved_til=\1 WHERE', stmt)
+        stmt = re.sub(r'peer_id=([0-9]+)WHERE channels.id=', r'peer_id=\1 WHERE channels.id=', stmt)
+        return stmt
+
     def _restore_transaction(self, tx: Iterator[bytes]):
         assert(self.db)
         cur = self.db.cursor()
         for q in tx:
-            cur.execute(q.decode('UTF-8'))
+            q = self._rewrite_stmt(q.decode('UTF-8'))
+            cur.execute(q)
         self.db.commit()
 
     def restore(self, dest: str, remove_existing: bool = False):
         """Restore the backup in this backend to its former glory.
-        """
 
+        If `dest` is a directory, we assume the default database filename:
+        lightningd.sqlite3
+        """
+        if os.path.isdir(dest):
+            dest = os.path.join(dest, "lightningd.sqlite3")
         if os.path.exists(dest):
             if not remove_existing:
                 raise ValueError(
@@ -227,7 +245,6 @@ class FileBackend(Backend):
             assert(version == self.version)
 
 
-
 def resolve_backend_class(backend_url):
     backend_map: Mapping[str, Type[Backend]] = {
         'file': FileBackend,
@@ -333,7 +350,6 @@ def kill(message: str):
     # Sleep forever, just in case the master doesn't die on us...
     while True:
         time.sleep(30)
-
 
 
 plugin.add_option(
