@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 from math import ceil
 from pyln.client import Plugin, Millisatoshi, RpcError
-import binascii
+from binascii import hexlify
+from channel_update import channelupdate
+from numpy.random import laplace
 import hashlib
 import secrets
 import threading
 import time
+import struct
 
 plugin = Plugin()
 
@@ -16,6 +19,7 @@ def get_reverse_chan(scid, chan):
             return c
 
     return None
+
 
 def get_circular_route(scid, chan, amt, peer, exclusions, request):
     """Compute a circular route with `scid` as last leg.
@@ -82,7 +86,7 @@ def try_rebalance(scid, chan, amt, peer, request):
         payment_key = secrets.token_bytes(32)
         payment_hash = hashlib.sha256(payment_key).hexdigest()
         plugin.rebalances[payment_hash] = {
-            "payment_key": binascii.hexlify(payment_key).decode('ASCII'),
+            "payment_key": hexlify(payment_key).decode('ASCII'),
             "payment_hash": payment_hash,
             "request": request,
         }
@@ -130,6 +134,7 @@ def get_peer_and_channel(peers, scid):
                 return (peer, channel)
 
     return (None, None)
+
 
 @plugin.async_hook("htlc_accepted")
 def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
@@ -179,8 +184,30 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     # Need to consider who the funder is, since they are paying the fees.
     # TODO If we are the funder we need to take the cost of an HTLC into
     # account as well.
-    #funder = chan['msatoshi_to_us_max'] == chan['msatoshi_total']
+    # funder = chan['msatoshi_to_us_max'] == chan['msatoshi_total']
     forward_amt = Millisatoshi(onion['forward_amount'])
+
+    noisy_spendable_msat = int(chan['spendable_msat']) - int(laplace(0., 10000000000.))
+
+    plugin.log("Checking whether forward_amt {} is bigger than {}. Real balance {}.".format(
+        forward_amt, noisy_spendable_msat, chan['spendable_msat']
+    ))
+
+    if int(forward_amt) > noisy_spendable_msat:
+        plugin.log("Going to fail the channel because forward_amt {} is bigger than {}".format(
+            forward_amt, noisy_spendable_msat
+        ))
+
+        # TODO: Does it matter if we get the 0 or 1 index of list channels response?
+        chaninfo = plugin.rpc.listchannels(chan['short_channel_id'])['channels'][0]
+        chanupd = channelupdate(chaninfo, plugin.rpc.getinfo()['network'], plugin)
+        chanupd = struct.pack('!H', len(chanupd)) + chanupd
+        failuremsg = '1007' + hexlify(chanupd).decode('ASCII')
+        request.set_result({
+            "result": "fail",
+            "failure_message": failuremsg
+            })
+        return
 
     # If we have enough capacity just let it through now. Otherwise the
     # Millisatoshi raises an error for negative amounts in the calculation

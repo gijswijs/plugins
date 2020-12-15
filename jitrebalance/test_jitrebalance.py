@@ -5,6 +5,7 @@ import os
 import time
 import pytest
 import unittest
+import json
 
 
 currdir = os.path.dirname(__file__)
@@ -189,3 +190,34 @@ def test_issue_88(node_factory):
     # attempting to access the short_channel_id on the l2 -> l4 channel:
     inv = l3.rpc.invoice(1000, 'lbl', 'desc')['bolt11']
     l1.rpc.pay(inv)
+
+@unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
+def test_payment(node_factory):
+    """Make a test payment that triggers failing the htlc.
+    """
+
+    # Create two nodes
+    opts = [{}, {'plugin': plugin}, {}]
+    alice, bob, charlie = node_factory.get_nodes(3, opts=opts)
+
+    # Open Channels
+    alice.openchannel(bob, capacity=4000000)
+    bob.openchannel(charlie, capacity=4000000)
+
+    # Now wait for gossip to settle and Alice to learn the topology so it can
+    # then route the payment.
+    wait_for(lambda: len(alice.rpc.listchannels()['channels']) == 4)
+
+    # Create an invoice
+    inv = charlie.rpc.invoice(
+        1000000000,
+        "imbalance", "imbalance"
+    )
+    time.sleep(1)
+    try:
+        alice.rpc.pay(inv['bolt11'])
+    except:
+        pass
+    boblogs = bob.rpc.getlog('info')
+    print(json.dumps(boblogs, indent=4))
+    assert False, "dumb assert to make PyTest print my stuff"
