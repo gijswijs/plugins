@@ -202,7 +202,7 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
 
             # TODO: Does it matter if we get the 0 or 1 index of list channels response?
             chaninfo = plugin.rpc.listchannels(chan['short_channel_id'])['channels'][0]
-            chanupd = channelupdate(chaninfo, plugin.rpc.getinfo()['network'], plugin)
+            chanupd = channelupdate(chaninfo)
             chanupd = struct.pack('!H', len(chanupd)) + chanupd
             failuremsg = '1007' + hexlify(chanupd).decode('ASCII')
             request.set_result({

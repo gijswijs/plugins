@@ -5,6 +5,17 @@ import struct
 import zbase32
 from binascii import hexlify
 import unittest
+import logging
+
+LOGGER = logging.getLogger(__name__)
+
+
+# def test_eggs():
+#     LOGGER.info('eggs info')
+#     LOGGER.warning('eggs warning')
+#     LOGGER.error('eggs error')
+#     LOGGER.critical('eggs critical')
+#     assert True
 
 currdir = os.path.dirname(__file__)
 plugin = os.path.join(currdir, 'jitrebalance.py')
@@ -19,7 +30,7 @@ def test_channel_update(node_factory, bitcoind):
     """
 
     # Create two nodes
-    opts = [{}, {'plugin': plugin}]
+    opts = [{}, {}]
     alice, bob = node_factory.get_nodes(2, opts=opts)
 
     # Open Channel
@@ -32,15 +43,20 @@ def test_channel_update(node_factory, bitcoind):
     # then request full channel info
     wait_for(lambda: len(alice.rpc.listchannels()['channels']) == 2)
 
+    # Get network
+    # network = alice.rpc.getinfo()['network']
+    scidab= alice.get_channel_scid(bob)
+    bitcoind.generate_block(6)
+    alice.wait_channel_active(scidab)
+
     # Get the full channel info (more than listpeers gives us)
     chan = alice.rpc.listchannels(scid)['channels'][0]
-
-    # Get network
-    network = alice.rpc.getinfo()['network']
+    LOGGER.info(chan)
+    LOGGER.info(bob.daemon.lightning_dir)
 
 
     # Call our function
-    cup = channelupdate(chan, network, alice)
+    cup = channelupdate(bob.daemon.lightning_dir, chan)
 
     # signature, chainhash, scid, timestamp, messageflags, channelflags, delay, htlcminmsat, basefee, feepermillion, htlcmaxmsat = struct.unpack('!65s32sQQBBHQLLQ', cup)
     signature, payload = struct.unpack('!65s76s', cup)
