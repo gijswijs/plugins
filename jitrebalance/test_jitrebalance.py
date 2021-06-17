@@ -5,7 +5,6 @@ import os
 import time
 import pytest
 import unittest
-import json
 
 
 currdir = os.path.dirname(__file__)
@@ -59,6 +58,7 @@ def test_simple_rebalance(node_factory):
 
     wait_for(no_pending_htlcs)
 
+    chan = l2.rpc.listpeers(l3.info['id'])['peers'][0]['channels'][0]
     assert(chan['spendable_msatoshi'] < amt)
 
     # Get (l2, l5) so we can exclude it when routing from l1 to l4
@@ -189,34 +189,3 @@ def test_issue_88(node_factory):
     # attempting to access the short_channel_id on the l2 -> l4 channel:
     inv = l3.rpc.invoice(1000, 'lbl', 'desc')['bolt11']
     l1.rpc.pay(inv)
-
-@unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
-def test_payment(node_factory):
-    """Make a test payment that triggers failing the htlc.
-    """
-
-    # Create two nodes
-    opts = [{}, {'plugin': plugin, 'jitrebalance-laplace-scale': 10000000000}, {}]
-    alice, bob, charlie = node_factory.get_nodes(3, opts=opts)
-
-    # Open Channels
-    alice.openchannel(bob, capacity=4000000)
-    bob.openchannel(charlie, capacity=4000000)
-
-    # Now wait for gossip to settle and Alice to learn the topology so it can
-    # then route the payment.
-    wait_for(lambda: len(alice.rpc.listchannels()['channels']) == 4)
-
-    # Create an invoice
-    inv = charlie.rpc.invoice(
-        1000000000,
-        "imbalance", "imbalance"
-    )
-    time.sleep(1)
-    try:
-        alice.rpc.pay(inv['bolt11'])
-    except:
-        pass
-
-    assert bob.daemon.is_in_log(r'Going to fail the channel because forward_amt \d*msat is bigger than .\d*')
-    assert bob.daemon.is_in_log(r'Checking whether forward_amt \d*msat is bigger than \d*\. Real balance \d*msat\.')

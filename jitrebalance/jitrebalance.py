@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 from math import ceil
 from pyln.client import Plugin, Millisatoshi, RpcError
-from binascii import hexlify
-from channel_update import channelupdate
-from numpy.random import laplace
+import binascii
 import hashlib
 import secrets
 import threading
 import time
-import struct
 
 plugin = Plugin()
 
@@ -86,7 +83,7 @@ def try_rebalance(scid, chan, amt, peer, request):
         payment_key = secrets.token_bytes(32)
         payment_hash = hashlib.sha256(payment_key).hexdigest()
         plugin.rebalances[payment_hash] = {
-            "payment_key": hexlify(payment_key).decode('ASCII'),
+            "payment_key": binascii.hexlify(payment_key).decode('ASCII'),
             "payment_hash": payment_hash,
             "request": request,
         }
@@ -187,30 +184,6 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     # funder = chan['msatoshi_to_us_max'] == chan['msatoshi_total']
     forward_amt = Millisatoshi(onion['forward_amount'])
 
-    if plugin.laplace_scale > 0:
-        
-        noisy_spendable_msat = int(chan['spendable_msat']) - int(laplace(0., plugin.laplace_scale))
-
-        plugin.log("Checking whether forward_amt {} is bigger than {}. Real balance {}.".format(
-            forward_amt, noisy_spendable_msat, chan['spendable_msat']
-        ))
-
-        if int(forward_amt) > noisy_spendable_msat:
-            plugin.log("Going to fail the channel because forward_amt {} is bigger than {}".format(
-                forward_amt, noisy_spendable_msat
-            ))
-
-            # TODO: Does it matter if we get the 0 or 1 index of list channels response?
-            chaninfo = plugin.rpc.listchannels(chan['short_channel_id'])['channels'][0]
-            chanupd = channelupdate(chaninfo)
-            chanupd = struct.pack('!H', len(chanupd)) + chanupd
-            failuremsg = '1007' + hexlify(chanupd).decode('ASCII')
-            request.set_result({
-                "result": "fail",
-                "failure_message": failuremsg
-                })
-            return
-
     # If we have enough capacity just let it through now. Otherwise the
     # Millisatoshi raises an error for negative amounts in the calculation
     # below.
@@ -243,7 +216,6 @@ def init(options, configuration, plugin):
     # FIXME: this int() shouldn't be needed: check if this is pyln's or
     # lightningd's fault.
     plugin.rebalance_timeout = int(options.get("jitrebalance-try-timeout"))
-    plugin.laplace_scale = float(options.get("jitrebalance-laplace-scale"))
 
     # Set of currently active rebalancings, keyed by their payment_hash
     plugin.rebalances = {}
@@ -253,13 +225,6 @@ plugin.add_option(
     "jitrebalance-try-timeout",
     60,
     "Number of seconds before we stop trying to rebalance a channel.",
-    opt_type="int"
-)
-
-plugin.add_option(
-    "jitrebalance-laplace-scale",
-    0,
-    "The exponential decay. Default is 0. Must be non-negative.",
     opt_type="int"
 )
 
