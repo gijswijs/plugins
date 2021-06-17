@@ -1,6 +1,9 @@
-from backup import FileBackend
+from backend import Backend
+from filebackend import FileBackend
+import socketbackend
 from flaky import flaky
 from pyln.testing.fixtures import *  # noqa: F401,F403
+from pyln.testing.utils import sync_blockheight
 import os
 import pytest
 import subprocess
@@ -18,7 +21,7 @@ def test_start(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -65,7 +68,7 @@ def test_init_not_empty(node_factory, directory):
     l1 = node_factory.get_node()
     l1.stop()
 
-    out = subprocess.check_output([cli_path, "init", bpath, bdest])
+    out = subprocess.check_output([cli_path, "init", "--lightning-dir", bpath, bdest])
     assert(b'Found an existing database' in out)
     assert(b'Successfully written initial snapshot' in out)
 
@@ -76,6 +79,7 @@ def test_init_not_empty(node_factory, directory):
     assert(l1.daemon.is_in_log(r'plugin-backup.py: Versions match up'))
 
 
+@flaky
 def test_tx_abort(node_factory, directory):
     """Simulate a crash between hook call and DB commit.
 
@@ -89,7 +93,7 @@ def test_tx_abort(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -119,7 +123,7 @@ def test_failing_restore(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -152,7 +156,7 @@ def test_intermittent_backup(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -178,7 +182,7 @@ def test_restore(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -194,7 +198,7 @@ def test_restore_dir(node_factory, directory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -215,7 +219,7 @@ def test_warning(directory, node_factory):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
     bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
-    subprocess.check_call([cli_path, "init", bpath, bdest])
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
     opts = {
         'plugin': plugin_path,
         'allow-deprecated-apis': deprecated_apis,
@@ -228,6 +232,9 @@ def test_warning(directory, node_factory):
         r'The `--backup-destination` option is deprecated and will be removed in future versions of the backup plugin.'
     ))
 
+class DummyBackend(Backend):
+    def __init__(self):
+        pass
 
 def test_rewrite():
     tests = [
@@ -237,7 +244,7 @@ def test_rewrite():
         ),
     ]
 
-    b = FileBackend('destination', create=False)
+    b = DummyBackend()
 
     for i, o in tests:
         assert(b._rewrite_stmt(i) == o)
@@ -249,3 +256,81 @@ def test_restore_pre_4090(directory):
     bdest = 'file://' + os.path.join(os.path.dirname(__file__), 'tests', 'pre-4090-backup.dbak')
     rdest = os.path.join(directory, 'lightningd.sqlite.restore')
     subprocess.check_call([cli_path, "restore", bdest, rdest])
+
+
+def test_compact(bitcoind, directory, node_factory):
+    bpath = os.path.join(directory, 'lightning-1', 'regtest')
+    bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
+    os.makedirs(bpath)
+    subprocess.check_call([cli_path, "init", "--lightning-dir", bpath, bdest])
+    opts = {
+        'plugin': plugin_path,
+        'allow-deprecated-apis': deprecated_apis,
+    }
+    l1 = node_factory.get_node(options=opts, cleandir=False)
+    l1.rpc.backup_compact()
+
+    tmp = tempfile.TemporaryDirectory()
+    subprocess.check_call([cli_path, "restore", bdest, tmp.name])
+
+    # Trigger a couple more changes and the compact again.
+    bitcoind.generate_block(100)
+    sync_blockheight(bitcoind, [l1])
+
+    l1.rpc.backup_compact()
+    tmp = tempfile.TemporaryDirectory()
+    subprocess.check_call([cli_path, "restore", bdest, tmp.name])
+
+def test_parse_socket_url():
+    with pytest.raises(ValueError):
+        # fail: invalid url scheme
+        socketbackend.parse_socket_url('none')
+        # fail: no port number
+        socketbackend.parse_socket_url('socket:127.0.0.1')
+        socketbackend.parse_socket_url('socket:127.0.0.1:')
+        # fail: unbracketed IPv6
+        socketbackend.parse_socket_url('socket:::1:1234')
+        # fail: no port number IPv6
+        socketbackend.parse_socket_url('socket:[::1]')
+        socketbackend.parse_socket_url('socket:[::1]:')
+        # fail: invalid port number
+        socketbackend.parse_socket_url('socket:127.0.0.1:12bla')
+        # fail: unrecognized query string key
+        socketbackend.parse_socket_url('socket:127.0.0.1:1234?dummy=value')
+        # fail: incomplete proxy spec
+        socketbackend.parse_socket_url('socket:127.0.0.1:1234?proxy=socks5')
+        socketbackend.parse_socket_url('socket:127.0.0.1:1234?proxy=socks5:')
+        socketbackend.parse_socket_url('socket:127.0.0.1:1234?proxy=socks5:127.0.0.1:')
+        # fail: unknown proxy scheme
+        socketbackend.parse_socket_url('socket:127.0.0.1:1234?proxy=socks6:127.0.0.1:9050')
+
+    # IPv4
+    s = socketbackend.parse_socket_url('socket:127.0.0.1:1234')
+    assert(s.target.host == '127.0.0.1')
+    assert(s.target.port == 1234)
+    assert(s.target.addrtype == socketbackend.AddrType.IPv4)
+    assert(s.proxytype == socketbackend.ProxyType.DIRECT)
+
+    # IPv6
+    s = socketbackend.parse_socket_url('socket:[::1]:1235')
+    assert(s.target.host == '::1')
+    assert(s.target.port == 1235)
+    assert(s.target.addrtype == socketbackend.AddrType.IPv6)
+    assert(s.proxytype == socketbackend.ProxyType.DIRECT)
+
+    # Hostname
+    s = socketbackend.parse_socket_url('socket:backup.local:1236')
+    assert(s.target.host == 'backup.local')
+    assert(s.target.port == 1236)
+    assert(s.target.addrtype == socketbackend.AddrType.NAME)
+    assert(s.proxytype == socketbackend.ProxyType.DIRECT)
+
+    # Tor
+    s = socketbackend.parse_socket_url('socket:backupserver.onion:1234?proxy=socks5:127.0.0.1:9050')
+    assert(s.target.host == 'backupserver.onion')
+    assert(s.target.port == 1234)
+    assert(s.target.addrtype == socketbackend.AddrType.NAME)
+    assert(s.proxytype == socketbackend.ProxyType.SOCKS5)
+    assert(s.proxytarget.host == '127.0.0.1')
+    assert(s.proxytarget.port == 9050)
+    assert(s.proxytarget.addrtype == socketbackend.AddrType.IPv4)

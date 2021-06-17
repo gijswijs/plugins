@@ -11,6 +11,7 @@ Community curated plugins for c-lightning.
 | [autopilot][autopilot]             | An autopilot that suggests channels that should be established                            |
 | [boltz-channel-creation][boltz]    | A c-lightning plugin for Boltz Channel Creation Swaps                                     |
 | [csvexportpays][csvexportpays]     | A plugin that exports all payments to a CSV file                                          |
+| [currencyrate][currencyrate]      | A plugin to convert other currencies to BTC using web requests
 | [donations][donations]             | A simple donations page to accept donations from the web                                  |
 | [drain][drain]                     | Draining, filling and balancing channels with automatic chunks.                           |
 | [event-websocket][event-websocket] | Exposes notifications over a Websocket                                                    |
@@ -25,12 +26,14 @@ Community curated plugins for c-lightning.
 | [pruning][pruning]                 | This plugin manages pruning of bitcoind such that it can always sync                      |
 | [rebalance][rebalance]             | Keeps your channels balanced                                                              |
 | [reckless][reckless]               | An **experimental** plugin manager (search/install plugins)                               |
+| [requestinvoice][request-invoice]  | Http server to request invoices                                            |
 | [sauron][sauron]                   | A Bitcoin backend relying on [Esplora][esplora]'s API                                     |
 | [sitzprobe][sitzprobe]             | A Lightning Network payment rehearsal utility                                             |
 | [sparko][sparko]                   | RPC over HTTP with fine-grained permissions, SSE and spark-wallet support                 |
 | [summary][summary]                 | Print a nice summary of the node status                                                   |
 | [trustedcoin][trustedcoin]         | Replace your Bitcoin Core with data from public block explorers                           |
 | [webhook][webhook]                 | Dispatches webhooks based from [event notifications][event-notifications]                 |
+| [watchtower][teos-client]          | Watchtower client for The Eye of Satoshi                                                  |
 | [zmq][zmq]                         | Publishes notifications via [ZeroMQ][zmq-home] to configured endpoints                    |
 
 ## Installation
@@ -52,8 +55,24 @@ Notes:
 
 Alternatively, especially when you use multiple plugins, you can copy or symlink
 all plugin directories into your `~/.lightning/plugins` directory. The daemon
-will load each executeable it finds in sub-directories as a plugin. In this case
+will load each executable it finds in sub-directories as a plugin. In this case
 you don't need to manage all the `--plugin=...` parameters.
+
+### Dynamic plugin initialization
+
+Most of the plugins can be managed using the RPC interface. Use
+```
+lightning-cli plugin start /path/to/plugin/directory/plugin_file_name
+```
+to start it, and
+```
+lightning-cli plugin stop /path/to/plugin/directory/plugin_file_name
+```
+to stop it.
+
+As a plugin developer this option is configurable with all the available plugin libraries,
+and defaults to `true`.
+
 
 ### PYTHONPATH and `pyln`
 
@@ -106,7 +125,9 @@ Running tests locally can be done like this:
 pytest YOUR_PLUGIN/YOUR_TEST.py
 ```
 
-### Additional dependencies
+### Python plugins specifics
+
+#### Additional dependencies
 
 Additionally, some Python plugins come with a `requirements.txt` which can be
 used to install the plugin's dependencies using the `pip` tools:
@@ -117,6 +138,12 @@ pip3 install -r requirements.txt
 
 Note: You might need to also specify the `--user` command line flag depending on
 your environment.
+
+#### Minimum supported Python version
+
+The minimum supported version of Python for this repository is currently `3.6.x` (23 Dec 2016).
+Python plugins users must ensure to have a version `>= 3.6`.
+Python plugins developers must ensure their plugin to work with all Python versions `>= 3.6`.
 
 
 ## More Plugins from the Community
@@ -144,6 +171,7 @@ your environment.
 [drain]: https://github.com/lightningd/plugins/tree/master/drain
 [plugin-docs]: https://lightning.readthedocs.io/PLUGINS.html
 [c-api]: https://github.com/ElementsProject/lightning/blob/master/plugins/libplugin.h
+[currencyrate]: https://github.com/lightningd/plugins/tree/master/currencyrate
 [python-api]: https://github.com/ElementsProject/lightning/tree/master/contrib/pylightning
 [python-api-pypi]: https://pypi.org/project/pylightning/
 [go-api]: https://github.com/niftynei/glightning
@@ -154,9 +182,10 @@ your environment.
 [graphql-spec]: https://graphql.org/
 [lightning-qt]: https://github.com/darosior/pylightning-qt
 [cpp-api]: https://github.com/darosior/lightningcpp
-[js-api]: https://github.com/darosior/clightningjs
+[js-api]: https://github.com/lightningd/clightningjs
 [monitor]: https://github.com/renepickhardt/plugins/tree/master/monitor
 [reckless]: https://github.com/darosior/reckless
+[request-invoice]: https://github.com/lightningd/plugins/tree/master/request-invoice
 [sauron]: https://github.com/lightningd/plugins/tree/master/sauron
 [zmq-home]: https://zeromq.org/
 [zmq]: https://github.com/lightningd/plugins/tree/master/zmq
@@ -170,3 +199,4 @@ your environment.
 [invoice-queue]: https://github.com/rbndg/Lightning-Invoice-Queue
 [boltz]: https://github.com/BoltzExchange/channel-creation-plugin
 [feeadjuster]: https://github.com/lightningd/plugins/tree/master/feeadjuster
+[teos-client]: https://github.com/talaia-labs/python-teos/tree/master/watchtower-plugin
