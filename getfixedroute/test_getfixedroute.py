@@ -1,5 +1,6 @@
 from pyln.testing.fixtures import *  # noqa: F401, F403
 from pyln.testing.utils import wait_for, DEVELOPER
+from pyln.client import Millisatoshi
 import os
 import unittest
 from random import random
@@ -16,17 +17,21 @@ def test_two_leg_route(node_factory):
     opts = [{'plugin': plugin}, {}, {}]
     l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
 
+    capacity = Millisatoshi(10**9)
+
     # Open the channels
     channels = [(l1, l2), (l2, l3)]
     for src, dst in channels:
-        src.openchannel(dst, capacity=10**6)
+        src.openchannel(dst, capacity=capacity.to_whole_satoshi())
     
     # Now wait for gossip to settle and l1 to learn the topology so it can
     # then find a route with `get route`
-    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == len(channels) * 2)
 
-    getroute = l1.rpc.getroute(l3.info['id'], 10**6, 1)
-    getfixedroute = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id']], 10**6)
+    amt = Millisatoshi(10**6)
+
+    getroute = l1.rpc.getroute(l3.info['id'], amt.millisatoshis, 1)
+    getfixedroute = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id']], amt.millisatoshis)
     assert(getroute == getfixedroute)
 
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
@@ -36,18 +41,21 @@ def test_one_leg_route(node_factory):
     """
     opts = [{'plugin': plugin}, {}]
     l1, l2 = node_factory.get_nodes(2, opts=opts)
+    capacity = Millisatoshi(10**9)
 
     # Open the channels
     channels = [(l1, l2)]
     for src, dst in channels:
-        src.openchannel(dst, capacity=10**6)
+        src.openchannel(dst, capacity=capacity.to_whole_satoshi())
     
     # Now wait for gossip to settle and l1 to learn the topology so it can
     # then find a route with `get route`
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == len(channels)*2)
 
-    getroute = l1.rpc.getroute(l2.info['id'], 10**6, 1)
-    getfixedroute = l1.rpc.getfixedroute([l1.info['id'], l2.info['id']], 10**6)
+    amt = Millisatoshi(10**6)
+
+    getroute = l1.rpc.getroute(l2.info['id'], amt.millisatoshis, 1)
+    getfixedroute = l1.rpc.getfixedroute([l1.info['id'], l2.info['id']], amt.millisatoshis)
     assert(getroute == getfixedroute)
 
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
@@ -57,22 +65,24 @@ def test_payment_with_fixedroute(node_factory):
     """
     opts = [{'plugin': plugin}, {}, {}]
     l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
+    capacity = Millisatoshi(10**9)
 
     # Open the channels
     channels = [(l1, l2), (l2, l3)]
     for src, dst in channels:
-        src.openchannel(dst, capacity=10**6)
+        src.openchannel(dst, capacity=capacity.to_whole_satoshi())
     
     # Now wait for gossip to settle and l1 to learn the topology so it can
     # then find a route with `get route`
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == len(channels)*2)
 
     # create invoice at l3 to be paid by l1
-    ph = l3.rpc.invoice(10**6, "test", "test")["payment_hash"]
+    amt = Millisatoshi(10**6)
+    ph = l3.rpc.invoice(amt.millisatoshis, "test", "test")["payment_hash"]
 
-    route = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id']], 10**6)["route"]
+    route = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id']], amt.millisatoshis)["route"]
 
-    l1.rpc.sendpay(route, ph, msatoshi=10**6)
+    l1.rpc.sendpay(route, ph, msatoshi=amt.millisatoshis)
     assert l1.rpc.waitsendpay(ph)['status'] == 'complete'
     
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
@@ -86,22 +96,24 @@ def test_payment_with_circular_route(node_factory):
     """
     opts = [{'plugin': plugin}, {}, {}]
     l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
+    capacity = Millisatoshi(10**9)
 
     # Open the channels
     channels = [(l1, l2), (l2, l3), (l3, l1)]
     for src, dst in channels:
-        src.openchannel(dst, capacity=10**6)
+        src.openchannel(dst, capacity=capacity.to_whole_satoshi())
     
     # Now wait for gossip to settle and l1 to learn the topology so it can
     # then find a route with `get route`
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == len(channels)*2)
 
     # create invoice at l1 to be paid by l1
-    ph = l1.rpc.invoice(10**4, "test", "test")["payment_hash"]
+    amt = Millisatoshi(10**4)
+    ph = l1.rpc.invoice(amt.millisatoshis, "test", "test")["payment_hash"]
 
-    route = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id'], l1.info['id']], 10**4)["route"]
+    route = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id'], l1.info['id']], amt.millisatoshis)["route"]
 
-    l1.rpc.sendpay(route, ph, msatoshi=10**4)
+    l1.rpc.sendpay(route, ph, msatoshi=amt.millisatoshis)
     assert l1.rpc.waitsendpay(ph)['status'] == 'complete'
 
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
@@ -113,33 +125,15 @@ def test_payment_with_circular_route_inversed(node_factory):
          /      \
         l1 ---- l3
     """
-    opts = [{'plugin': plugin, 'dev-no-fake-fees': True, 'start': False}, {'dev-no-fake-fees': True, 'start': False}, {'dev-no-fake-fees': True, 'start': False}]
+    opts = [{'plugin': plugin}, {}, {}]
     l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
-    
-    l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
-        'error': {"errors": ["Insufficient data or no feerate found"], "blocks": 0}
-    })
-    l2.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
-        'error': {"errors": ["Insufficient data or no feerate found"], "blocks": 0}
-    })
-    l3.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
-        'error': {"errors": ["Insufficient data or no feerate found"], "blocks": 0}
-    })
-    l1.start()
-    l2.start()
-    l3.start()
 
-
-    l1.set_feerates((15, 15, 15, 15), True)
-    l2.set_feerates((15, 15, 15, 15), True)
-    l3.set_feerates((15, 15, 15, 15), True)
-
-    capacity=10**6
+    capacity=Millisatoshi(10**9)
 
     # Open the channels
     channels = [(l1, l2), (l2, l3), (l3, l1)]
     for src, dst in channels:
-        src.openchannel(dst, capacity=capacity)
+        src.openchannel(dst, capacity=capacity.to_whole_satoshi())
     
     # Now wait for gossip to settle and l1 to learn the topology so it can
     # then find a route with `get route`
@@ -147,43 +141,41 @@ def test_payment_with_circular_route_inversed(node_factory):
 
      # Get all channels balanced (by paying money to the other node)
     for src, dst in channels:
-        src.pay(dst, (capacity // 2)*1000)
+        src.pay(dst, capacity.millisatoshis // 2)
         src.wait_for_htlcs()
 
     # create invoice at l1 to be paid by l1
-    ph = l1.rpc.invoice(10**4, "test", "test")["payment_hash"]
+    amt = Millisatoshi(10**4)
+    ph = l1.rpc.invoice(amt.millisatoshis, "test", "test")["payment_hash"]
 
-    route = l1.rpc.getfixedroute([l1.info['id'], l3.info['id'], l2.info['id'], l1.info['id']], 10**4)["route"]
-    test = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id'], l1.info['id']], 10**4)["route"]
-    print("ROUTE: {}".format(route))
-    print("LISTPEERS L1: {}\n".format(l1.rpc.listpeers()))
-    print("LISTPEERS L2: {}\n".format(l2.rpc.listpeers()))
-    print("LISTPEERS L3: {}\n".format(l3.rpc.listpeers()))
+    route = l1.rpc.getfixedroute([l1.info['id'], l3.info['id'], l2.info['id'], l1.info['id']], amt.millisatoshis)["route"]
 
-    l1.rpc.sendpay(route, ph, msatoshi=10**4)
+    l1.rpc.sendpay(route, ph, msatoshi=amt.millisatoshis)
     assert l1.rpc.waitsendpay(ph)['status'] == 'complete'
     
-
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")
-def test_two_way_payment(node_factory):
-    """Send a payment to and fro
-    l1 ---- l2
+def test_extra_channel_info(node_factory):
+    """Simple route where getroute and getfixedroute should result in the same route
+    l1 ---- l2 ---- l3
     """
-    opts = [{},{}]
-    l1, l2 = node_factory.get_nodes(2, opts=opts)
+    opts = [{'plugin': plugin}, {}, {}]
+    l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
+
+    capacity = Millisatoshi(10**9)
+
+    # Open the channels
+    l1.connect(l2)
+    l1.fundchannel(l2, amount=capacity.to_whole_satoshi(), announce_channel=True)
+    l2.connect(l3)
+    l2.fundchannel(l3, amount=capacity.to_whole_satoshi(), announce_channel=False)
     
-    capacity=10**6
+    amt = Millisatoshi(10**6)
+    ph = l3.rpc.invoice(amt.millisatoshis, "test", "test")["payment_hash"]
 
-    l1.openchannel(l2, capacity=capacity)
-    
-    # Now wait for gossip to settle and l1 to learn the topology
-    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
+    # l1 cannot know about the channel between l2 and l3, since it was not announced
+    # We provide extra channels by adding the channels from the pov of l3
+    # getfixedroute should include those in its path finding.
+    route = l1.rpc.getfixedroute([l1.info['id'], l2.info['id'], l3.info['id']], amt.millisatoshis, l3.rpc.listchannels()["channels"])["route"]
 
-     # Get all channels balanced (by paying money to the other node)
-    l1.pay(l2, (capacity // 2) * 1000)
-    l1.wait_for_htlcs()
-
-    print("LISTPEERS L2: {}\n".format(l2.rpc.listpeers()))
-
-    l2.pay(l1, capacity // 20)
-    l2.wait_for_htlcs()
+    l1.rpc.sendpay(route, ph, msatoshi=amt.millisatoshis)
+    assert l1.rpc.waitsendpay(ph)['status'] == 'complete'
