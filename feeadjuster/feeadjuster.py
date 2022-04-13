@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import random
+import statistics
 import time
 from pyln.client import Plugin, Millisatoshi, RpcError
 from threading import Lock
@@ -8,8 +9,10 @@ from threading import Lock
 plugin = Plugin()
 # Our amount and the total amount in each of our channel, indexed by scid
 plugin.adj_balances = {}
-# Cache to avoid loads of calls to getinfo
+# Cache to avoid loads of RPC calls
 plugin.our_node_id = None
+plugin.peers = None
+plugin.channels = None
 # Users can configure this
 plugin.update_threshold = 0.05
 # forward_event must wait for init
@@ -60,20 +63,60 @@ def get_ratio_hard(our_percentage):
     return 100**(0.5 - our_percentage) * (1 - our_percentage) * 2
 
 
+def get_peer_id_for_scid(plugin: Plugin, scid: str):
+    for peer in plugin.peers:
+        for ch in peer['channels']:
+            if ch.get('short_channel_id') == scid:
+                return peer['id']
+    return None
+
+
+def get_local_channel_for_scid(plugin: Plugin, scid: str):
+    for peer in plugin.peers:
+        for ch in peer['channels']:
+            if ch.get('short_channel_id') == scid:
+                return ch
+    return None
+
+
 def get_chan_fees(plugin: Plugin, scid: str):
-    channels = plugin.rpc.listchannels(scid)["channels"]
-    for ch in channels:
-        if ch["source"] == plugin.our_node_id:
-            return {"base_fee_millisatoshi": ch["base_fee_millisatoshi"],
-                    "fee_per_millionth": ch["fee_per_millionth"]}
+    channel = get_local_channel_for_scid(plugin, scid)
+    assert channel is not None
+    return {"base": channel["fee_base_msat"], "ppm": channel["fee_proportional_millionths"]}
 
 
-def maybe_setchannelfee(plugin: Plugin, scid: str, base: int, ppm: int):
+def get_fees_global(plugin: Plugin, scid: str):
+    return {"base": plugin.adj_basefee, "ppm": plugin.adj_ppmfee}
+
+
+def get_fees_median(plugin: Plugin, scid: str):
+    """ Median fees from peers or peer.
+
+    The assumption is that our node competes in fees to other peers of a peer.
+    """
+    peer_id = get_peer_id_for_scid(plugin, scid)
+    assert peer_id is not None
+    if plugin.listchannels_by_dst:
+        plugin.channels = plugin.rpc.call("listchannels",
+                                          {"destination": peer_id})['channels']
+    channels_to_peer = [ch for ch in plugin.channels
+                        if ch['destination'] == peer_id
+                        and ch['source'] != plugin.our_node_id]
+    if len(channels_to_peer) == 0:
+        return None
+    fees_ppm = [ch['fee_per_millionth'] for ch in channels_to_peer]
+    return {"base": plugin.adj_basefee, "ppm": statistics.median(fees_ppm)}
+
+
+def setchannelfee(plugin: Plugin, scid: str, base: int, ppm: int):
     fees = get_chan_fees(plugin, scid)
-    if fees is None or base == fees["base_fee_millisatoshi"] and ppm == fees["fee_per_millionth"]:
+    if fees is None or base == fees['base'] and ppm == fees['ppm']:
         return False
     try:
-        plugin.rpc.setchannelfee(scid, base, ppm)
+        if plugin.rpcfeemethod == 'setchannel':
+            plugin.rpc.setchannel(scid, base, ppm)  # new method
+        else:
+            plugin.rpc.setchannelfee(scid, base, ppm)  # deprecated
         return True
     except RpcError as e:
         plugin.log(f"Could not adjust fees for channel {scid}: '{e}'", level="error")
@@ -106,10 +149,18 @@ def maybe_adjust_fees(plugin: Plugin, scids: list):
         our = plugin.adj_balances[scid]["our"]
         total = plugin.adj_balances[scid]["total"]
         percentage = our / total
+        base = plugin.adj_basefee
+        ppm = plugin.adj_ppmfee
+
+        # select ideal values per channel
+        fees = plugin.fee_strategy(plugin, scid)
+        if fees is not None:
+            base = fees['base']
+            ppm = fees['ppm']
 
         # reset to normal fees if imbalance is not high enough
         if (percentage > plugin.imbalance and percentage < 1 - plugin.imbalance):
-            if maybe_setchannelfee(plugin, scid, plugin.adj_basefee, plugin.adj_ppmfee):
+            if setchannelfee(plugin, scid, base, ppm):
                 plugin.log(f"Set default fees as imbalance is too low: {scid}")
                 plugin.adj_balances[scid]["last_liquidity"] = our
                 channels_adjusted += 1
@@ -121,8 +172,7 @@ def maybe_adjust_fees(plugin: Plugin, scids: list):
         percentage = get_adjusted_percentage(plugin, scid)
         assert 0 <= percentage and percentage <= 1
         ratio = plugin.get_ratio(percentage)
-        if maybe_setchannelfee(plugin, scid, int(plugin.adj_basefee * ratio),
-                               int(plugin.adj_ppmfee * ratio)):
+        if setchannelfee(plugin, scid, int(base), int(ppm * ratio)):
             plugin.log(f"Adjusted fees of {scid} with a ratio of {ratio}")
             plugin.adj_balances[scid]["last_liquidity"] = our
             channels_adjusted += 1
@@ -130,29 +180,17 @@ def maybe_adjust_fees(plugin: Plugin, scids: list):
 
 
 def get_chan(plugin: Plugin, scid: str):
-    for peer in plugin.rpc.listpeers()["peers"]:
-        if len(peer["channels"]) == 0:
-            continue
-        # We might have multiple channel entries ! Eg if one was just closed
-        # and reopened.
+    for peer in plugin.peers:
         for chan in peer["channels"]:
-            if "short_channel_id" not in chan:
-                continue
-            if chan["short_channel_id"] == scid:
+            if chan.get("short_channel_id") == scid:
                 return chan
 
 
 def maybe_add_new_balances(plugin: Plugin, scids: list):
     for scid in scids:
         if scid not in plugin.adj_balances:
-            # At this point we could call listchannels and pass the scid as
-            # argument, and deduce the peer id (!our_id). But -as unlikely as
-            # it is- we may not find it in our gossip (eg some corruption of
-            # the gossip_store occured just before the forwarding event).
-            # However, it MUST be present in a listpeers() entry.
             chan = get_chan(plugin, scid)
             assert chan is not None
-
             plugin.adj_balances[scid] = {
                 "our": int(chan["to_us_msat"]),
                 "total": int(chan["total_msat"])
@@ -164,6 +202,9 @@ def forward_event(plugin: Plugin, forward_event: dict, **kwargs):
     if not plugin.forward_event_subscription:
         return
     plugin.mutex.acquire(blocking=True)
+    plugin.peers = plugin.rpc.listpeers()["peers"]
+    if plugin.fee_strategy == get_fees_median and not plugin.listchannels_by_dst:
+        plugin.channels = plugin.rpc.listchannels()['channels']
     if forward_event["status"] == "settled":
         in_scid = forward_event["in_channel"]
         out_scid = forward_event["out_channel"]
@@ -182,25 +223,29 @@ def forward_event(plugin: Plugin, forward_event: dict, **kwargs):
 
 
 @plugin.method("feeadjust")
-def feeadjust(plugin: Plugin):
-    """Adjust fees for all existing channels.
+def feeadjust(plugin: Plugin, scid: str = None):
+    """Adjust fees for all channels (default) or just a given `scid`.
 
     This method is automatically called in plugin init, or can be called manually after a successful payment.
     Otherwise, the plugin keeps the fees up-to-date.
     """
     plugin.mutex.acquire(blocking=True)
-    peers = plugin.rpc.listpeers()["peers"]
+    plugin.peers = plugin.rpc.listpeers()["peers"]
+    if plugin.fee_strategy == get_fees_median and not plugin.listchannels_by_dst:
+        plugin.channels = plugin.rpc.listchannels()['channels']
     channels_adjusted = 0
-    for peer in peers:
+    for peer in plugin.peers:
         for chan in peer["channels"]:
             if chan["state"] == "CHANNELD_NORMAL":
-                scid = chan["short_channel_id"]
-                plugin.adj_balances[scid] = {
+                _scid = chan.get("short_channel_id")
+                if scid is not None and scid != _scid:
+                    continue
+                plugin.adj_balances[_scid] = {
                     "our": int(chan["to_us_msat"]),
                     "total": int(chan["total_msat"])
                 }
-                channels_adjusted += maybe_adjust_fees(plugin, [scid])
-    msg = f"{channels_adjusted} channels adjusted"
+                channels_adjusted += maybe_adjust_fees(plugin, [_scid])
+    msg = f"{channels_adjusted} channel(s) adjusted"
     plugin.log(msg)
     plugin.mutex.release()
     return msg
@@ -236,6 +281,11 @@ def init(options: dict, configuration: dict, plugin: Plugin, **kwargs):
         "default": get_ratio
     }
     plugin.get_ratio = adjustment_switch.get(options.get("feeadjuster-adjustment-method"), get_ratio)
+    fee_strategy_switch = {
+        "global": get_fees_global,
+        "median": get_fees_median
+    }
+    plugin.fee_strategy = fee_strategy_switch.get(options.get("feeadjuster-feestrategy"), get_fees_global)
     config = plugin.rpc.listconfigs()
     plugin.adj_basefee = config["fee-base"]
     plugin.adj_ppmfee = config["fee-per-satoshi"]
@@ -246,11 +296,29 @@ def init(options: dict, configuration: dict, plugin: Plugin, **kwargs):
     if plugin.imbalance > 0.5:
         plugin.imbalance = 1 - plugin.imbalance
 
-    plugin.log(f"Plugin feeadjuster initialized ({plugin.adj_basefee} base / {plugin.adj_ppmfee} ppm) with an "
+    # detect if server supports the new listchannels by `destination` (#4614)
+    plugin.listchannels_by_dst = False
+    rpchelp = plugin.rpc.help().get('help')
+    if len([c for c in rpchelp if c["command"].startswith("listchannels ")
+            and "destination" in c["command"]]) == 1:
+        plugin.listchannels_by_dst = True
+
+    # detect if server supports new 'setchannel' command over setchannelfee
+    plugin.rpcfeemethod = 'setchannelfee'
+    if len([c for c in rpchelp if c["command"].startswith("setchannel ")]) == 1:
+        plugin.rpcfeemethod = 'setchannel'
+
+    plugin.log(f"Plugin feeadjuster initialized "
+               f"({plugin.adj_basefee} base / {plugin.adj_ppmfee} ppm) with an "
                f"imbalance of {int(100 * plugin.imbalance)}%/{int(100 * ( 1 - plugin.imbalance))}%, "
-               f"update_threshold: {int(100 * plugin.update_threshold)}%, update_threshold_abs: {plugin.update_threshold_abs}, "
-               f"enough_liquidity: {plugin.big_enough_liquidity}, deactivate_fuzz: {plugin.deactivate_fuzz}, "
-               f"forward_event_subscription: {plugin.forward_event_subscription}, adjustment_method: {plugin.get_ratio.__name__}")
+               f"update_threshold: {int(100 * plugin.update_threshold)}%, "
+               f"update_threshold_abs: {plugin.update_threshold_abs}, "
+               f"enough_liquidity: {plugin.big_enough_liquidity}, "
+               f"deactivate_fuzz: {plugin.deactivate_fuzz}, "
+               f"forward_event_subscription: {plugin.forward_event_subscription}, "
+               f"adjustment_method: {plugin.get_ratio.__name__}, "
+               f"fee_strategy: {plugin.fee_strategy.__name__}, "
+               f"listchannels_by_dst: {plugin.listchannels_by_dst}")
     plugin.mutex.release()
     feeadjust(plugin)
 
@@ -303,6 +371,15 @@ plugin.add_option(
     "Default: 0.5 (always). Set higher or lower values to limit feeadjuster's "
     "activity to more imbalanced channels. "
     "E.g. 0.3 for '70/30'% or 0.6 for '40/60'%.",
+    "string"
+)
+plugin.add_option(
+    "feeadjuster-feestrategy",
+    "global",
+    "Sets the per channel fee selection strategy. "
+    "Can be 'global' to use global config or default values, "
+    "or 'median' to use the median fees from peers of peer "
+    "Default: 'global'.",
     "string"
 )
 plugin.run()

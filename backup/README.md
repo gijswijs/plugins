@@ -22,7 +22,8 @@ pip3 install --user -r requirements.txt
 Before the backup plugin can be used it has to be initialized once. The following
 command will create /mnt/external/location/file.sql as backup file and reference it 
 in `backup.lock` in the lightning directory that stores the internal state, and 
-which makes sure no two instances are using the same backup.
+which makes sure no two instances are using the same backup. (Make sure to stop 
+your Lightning node before running this command)
 
 ```bash
 ./backup-cli init --lightning-dir ~/.lightning/bitcoin file:///mnt/external/location/file.bkp
@@ -51,7 +52,8 @@ to work: `chmod 0400 hsm_secret`
 
 In order to tell `lightningd` to use the plugin you either need to tell it
 via the startup option `--plugin /path/to/backup.py` or by placing it (or a
-symlink to it) in the lightning plugin directory (`~/.lightning/plugins`).
+symlink to it) in the lightning plugin directory (`~/.lightning/plugins`) or
+by adding it to the `lightningd` configuration (`important-plugin=/path/to/backup.py`).
 
 On daemon startup the plugin will check the integrity of the existing backup
 and complain if there is a version mismatch.

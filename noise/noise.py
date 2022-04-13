@@ -119,6 +119,10 @@ def deliver(node_id, payload, amt, payment_hash, max_attempts=5):
 
 @plugin.async_method('sendmsg')
 def sendmsg(node_id, msg, plugin, request, pay=None, **kwargs):
+    """Sends a chat message.
+
+    First paramter is the message payload as a string.
+    """
     timestamp = struct.pack("!Q", int(time.time() * 1000))
     payload = TlvPayload()
     payload.add_field(TLV_NOISE_MESSAGE, msg.encode('UTF-8'))
@@ -150,10 +154,15 @@ def sendmsg(node_id, msg, plugin, request, pay=None, **kwargs):
 
 
 @plugin.async_method('recvmsg')
-def recvmsg(plugin, request, last_id=None, **kwargs):
-    next_id = int(last_id) + 1 if last_id is not None else len(plugin.messages)
-    if next_id < len(plugin.messages):
-        res = plugin.messages[int(last_id)].to_dict()
+def recvmsg(plugin, request, msg_id=None, **kwargs):
+    """Receives a chat message.
+
+    Returns a `concurrent.futures.Future`.
+    Optional parameter `msg_id` can be supplied to return an older messages.
+    """
+    msg_id = int(msg_id) if msg_id is not None else len(plugin.messages)
+    if msg_id < len(plugin.messages):
+        res = plugin.messages[msg_id].to_dict()
         res['total_messages'] = len(plugin.messages)
         request.set_result(res)
     else:

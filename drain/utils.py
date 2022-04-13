@@ -3,6 +3,8 @@ import time
 TIMEOUT = 60
 
 
+# we need to have this pyln.testing.utils code duplication
+# as this also needs to be run without testing libs
 def wait_for(success, timeout=TIMEOUT):
     start_time = time.time()
     interval = 0.25
@@ -23,13 +25,13 @@ def wait_for_all_htlcs(nodes):
 
 # returns our_amount_msat for a given node and scid
 def get_ours(node, scid):
-    return [c for c in node.rpc.listfunds()['channels'] if c['short_channel_id'] == scid][0]['our_amount_msat']
+    return [c for c in node.rpc.listfunds()['channels'] if c.get('short_channel_id') == scid][0]['our_amount_msat']
 
 
 # returns their_amount_msat for a given node and scid
 def get_theirs(node, scid):
     ours = get_ours(node, scid)
-    total = [c for c in node.rpc.listfunds()['channels'] if c['short_channel_id'] == scid][0]['amount_msat']
+    total = [c for c in node.rpc.listfunds()['channels'] if c.get('short_channel_id') == scid][0]['amount_msat']
     return total - ours
 
 

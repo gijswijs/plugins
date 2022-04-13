@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
-from bech32 import bech32_decode, CHARSET, convertbits
+from bech32 import bech32_decode, convertbits
 from lib_autopilot import Autopilot, Strategy
-from pyln.client import LightningRpc, Plugin, RpcError
+from pyln.client import Plugin, RpcError
 import random
+import threading
 import math
 import networkx as nx
 import dns.resolver
 import time
+
+
+plugin = Plugin()
 
 
 class CLightning_autopilot(Autopilot):
@@ -15,7 +19,7 @@ class CLightning_autopilot(Autopilot):
     def __init__(self, rpc):
         self.__rpc_interface = rpc
 
-        print("No input specified download graph from peers")
+        plugin.log("No input specified download graph from peers")
         G = self.__download_graph()
         Autopilot.__init__(self, G)
 
@@ -24,7 +28,7 @@ class CLightning_autopilot(Autopilot):
         retrieve the nodeids of the ln seed nodes from lseed.bitcoinstats.com
         """
         domain = "lseed.bitcoinstats.com"
-        srv_records = dns.resolver.query(domain, "SRV")
+        srv_records = dns.resolver.resolve(domain, "SRV")
         res = []
         for srv in srv_records:
             bech32 = str(srv.target).rstrip(".").split(".")[0]
@@ -45,13 +49,12 @@ class CLightning_autopilot(Autopilot):
         random.shuffle(seed_keys)
         for nodeid in seed_keys:
             try:
-                print("peering with node: {}".format(nodeid))
+                plugin.log(f"peering with node: {nodeid}")
                 self.__rpc_interface.connect(nodeid)
                 # FIXME: better strategy than sleep(2) for building up
                 time.sleep(2)
             except RpcError as e:
-                print("Unable to connect to node: {}".format(nodeid))
-                print(e)
+                plugin.log(f"Unable to connect to node: {nodeid}  {str(e)}", 'warn')
 
     def __download_graph(self):
         """
@@ -64,10 +67,10 @@ class CLightning_autopilot(Autopilot):
         # FIXME: it is a real problem that we don't know how many nodes there
         # could be. In particular billion nodes networks will outgrow memory
         G = nx.Graph()
-        print("Instantiated networkx graph to store the lightning network")
+        plugin.log("Instantiated networkx graph to store the lightning network")
 
         nodes = []
-        print("Attempt RPC-call to download nodes from the lightning network")
+        plugin.log("Attempt RPC-call to download nodes from the lightning network")
         try:
             while len(nodes) == 0:
                 peers = self.__rpc_interface.listpeers()["peers"]
@@ -75,21 +78,21 @@ class CLightning_autopilot(Autopilot):
                     self.__connect_to_seeds()
                 nodes = self.__rpc_interface.listnodes()["nodes"]
         except ValueError as e:
-            print("Node list could not be retrieved from the peers of the lightning network")
+            plugin.log("Node list could not be retrieved from the peers of the lightning network", 'error')
             raise e
 
         for node in nodes:
             G.add_node(node["nodeid"], **node)
 
-        print("Number of nodes found and added to the local networkx graph: {}".format(len(nodes)))
+        plugin.log(f"Number of nodes found and added to the local networkx graph: {len(nodes)}")
 
         channels = {}
         try:
-            print("Attempt RPC-call to download channels from the lightning network")
+            plugin.log("Attempt RPC-call to download channels from the lightning network")
             channels = self.__rpc_interface.listchannels()["channels"]
-            print("Number of retrieved channels: {}".format(len(channels)))
-        except ValueError as e:
-            print("Channel list could not be retrieved from the peers of the lightning network")
+            plugin.log(f"Number of retrieved channels: {len(channels)}")
+        except ValueError:
+            plugin.log("Channel list could not be retrieved from the peers of the lightning network")
             return False
 
         for channel in channels:
@@ -103,22 +106,19 @@ class CLightning_autopilot(Autopilot):
     def connect(self, candidates, balance=1000000, dryrun=False):
         pdf = self.calculate_statistics(candidates)
         connection_dict = self.calculate_proposed_channel_capacities(pdf, balance)
+        messages = []
         for nodeid, fraction in connection_dict.items():
             try:
                 satoshis = min(math.ceil(balance * fraction), 16777215)
-                print("Try to open channel with a capacity of {} to node {}".format(satoshis, nodeid))
+                messages.append(f"Try to open channel with a capacity of {satoshis} to node {nodeid}")
+                plugin.log(messages[-1])
                 if not dryrun:
                     self.__rpc_interface.connect(nodeid)
                     self.__rpc_interface.fundchannel(nodeid, satoshis, None, True, 0)
             except ValueError as e:
-                print("Could not open a channel to {} with capacity of {}. Error: {}".format(nodeid, satoshis, str(e)))
-
-
-try:
-    # C-lightning v0.7.2
-    plugin = Plugin(dynamic=False)
-except:
-    plugin = Plugin()
+                messages.append(f"Could not open a channel to {nodeid} with capacity of {satoshis}. Error: {str(e)}")
+                plugin.log(messages[-1], 'error')
+        return messages
 
 
 @plugin.init()
@@ -126,12 +126,31 @@ def init(configuration, options, plugin):
     plugin.num_channels = int(options['autopilot-num-channels'])
     plugin.percent = int(options['autopilot-percent'])
     plugin.min_capacity_sat = int(options['autopilot-min-channel-size-msat']) / 1000
+    plugin.initialized = threading.Event()
+    plugin.autopilot = None
+    plugin.initerror = None
+    plugin.log('Initialized autopilot function')
 
-    plugin.autopilot = CLightning_autopilot(plugin.rpc)
+    def initialize_autopilot():
+        try:
+            plugin.autopilot = CLightning_autopilot(plugin.rpc)
+        except Exception as e:
+            plugin.initerror = e
+        plugin.initialized.set()
+
+    # Load the autopilot in the background and have it notify
+    # dependents once we're finished.
+    threading.Thread(target=initialize_autopilot, daemon=True).start()
 
 
 @plugin.method('autopilot-run-once')
 def run_once(plugin, dryrun=False):
+    """
+    Run the autopilot manually one time.
+
+    The argument 'dryrun' can be set to True in order to just output what would
+    be done without actually opening any channels.
+    """
     # Let's start by inspecting the current state of the node
     funds = plugin.rpc.listfunds()
     awaiting_lockin_funds = sum([o['channel_sat'] for o in funds['channels'] if o['state'] == 'CHANNELD_AWAITING_LOCKIN'])
@@ -144,12 +163,14 @@ def run_once(plugin, dryrun=False):
     # to open
 
     if available_funds < plugin.min_capacity_sat:
-        print("Too low available funds: {} < {}".format(available_funds, plugin.min_capacity_sat))
-        return False
+        message = f"Too low available funds: {available_funds} < {plugin.min_capacity_sat}"
+        plugin.log(message)
+        return message
 
     if len(channels) >= plugin.num_channels:
-        print("Already have {} channels. Aim is for {}.".format(len(channels), plugin.num_channels))
-        return False
+        message = f"Already have {len(channels)} channels. Aim is for {plugin.num_channels}."
+        plugin.log(message)
+        return message
 
     num_channels = min(
         int(available_funds / plugin.min_capacity_sat),
@@ -159,14 +180,20 @@ def run_once(plugin, dryrun=False):
     # Each channel will have this capacity
     channel_capacity = math.floor(available_funds / num_channels)
 
-    print("I'd like to open {} new channels with {} satoshis each".format(num_channels, channel_capacity))
+    plugin.log(f"I'd like to open {num_channels} new channels with {channel_capacity} satoshis each")
+
+    plugin.initialized.wait()
+    if plugin.initerror:
+        message = f"Error: autopilot had initialization errors: {str(plugin.initerror)}"
+        plugin.log(message, 'error')
+        return message
 
     candidates = plugin.autopilot.find_candidates(
         num_channels,
         strategy=Strategy.DIVERSE,
         percentile=0.5
     )
-    plugin.autopilot.connect(candidates, available_funds, dryrun=dryrun)
+    return plugin.autopilot.connect(candidates, available_funds, dryrun=dryrun)
 
 
 plugin.add_option(

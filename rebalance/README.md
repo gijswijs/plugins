@@ -11,9 +11,11 @@ For general plugin installation instructions see the repos main
 
 ## Usage
 
-Once the plugin is installed and active, there are two additional methods to rebalance channels:
+Once the plugin is installed and active, there are four additional methods for helping to rebalance channels:
 1) Either you can call `lightning-cli rebalanceall` to automatically fix all of your channels' liquidity.
-2) Or you can call `lightning-cli rebalance outgoing_scid incoming_scid` to rebalance individual channels.
+2) `lightning-cli rebalancestop` stops the ongoing `rebalanceall`.
+3) Or you can call `lightning-cli rebalance outgoing_scid incoming_scid` to rebalance individual channels.
+4) `lightning-cli rebalancereport` shows information: plugin settings, past rebalance stats, etc.
 
 ## Automatic rebalance
 
@@ -48,9 +50,12 @@ This process may take a while. Automatic rebalance can run for hours in the back
 You can use the `lightning-cli` to rebalance channels like this:
 
 ```
-lightning-cli rebalance outgoing_scid incoming_scid [msatoshi] [maxfeepercent] [retry_for] [exemptfee]
+lightning-cli rebalance outgoing_scid incoming_scid [msatoshi] [retry_for] [maxfeepercent] [exemptfee] [getroute_method]
 ```
-
+def rebalance(plugin, outgoing_scid, incoming_scid, msatoshi: Millisatoshi = None,
+              retry_for: int = 60, maxfeepercent: float = 0.5,
+              exemptfee: Millisatoshi = Millisatoshi(5000),
+              getroute_method=None):
 If you want to skip/default certain optional parameters but use others, you can
 use always the `lightning-cli -k` (key=value) syntax like this:
 
@@ -66,14 +71,18 @@ lightning-cli rebalance -k outgoing_scid=1514942x51x0 incoming_scid=1515133x10x0
   transferred. If the parameter is left out, the plugin will calucate an amount
   that will balance the channels 50%/50%. The parameter can also be given in
   other denominations by appending i.e. '1000000sat', '0.01btc' or '10mbtc'.
-- OPTIONAL: `maxfeepercent` is a perecentage limit of the money to be paid in
-  fees and defaults to 0.5.
 - OPTIONAL: `retry_for` defines the number of seconds the plugin will retry to
   find a suitable route. Default: 60 seconds.
+- OPTIONAL: `maxfeepercent` is a perecentage limit of the money to be paid in
+  fees and defaults to 0.5.
 - OPTIONAL: The `exemptfee` option can be used for tiny payments which would be
   dominated by the fee leveraged by forwarding nodes. Setting `exemptfee`
   allows the `maxfeepercent` check to be skipped on fees that are smaller than
   exemptfee (default: 5000 millisatoshi).
+- OPTIONAL: The `getroute_method` option can be for route search can be 'basic'
+  or 'iterative'.  
+  'basic': Tries all routes sequentially.  
+  'iterative': Tries shorter and bigger routes first.
 
 
 #### Tips and Tricks for individual rebalance

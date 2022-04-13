@@ -9,24 +9,30 @@ Community curated plugins for c-lightning.
 | Name                               | Short description                                                                         |
 |------------------------------------|-------------------------------------------------------------------------------------------|
 | [autopilot][autopilot]             | An autopilot that suggests channels that should be established                            |
+| [backup][backup]                   | A simple and reliable backup plugin                                                       |
 | [boltz-channel-creation][boltz]    | A c-lightning plugin for Boltz Channel Creation Swaps                                     |
+| [btcli4j][btcli4j]                 | A Bitcoin Backend to enable safely the pruning mode, and support also rest APIs.          |
+| [commando][commando]               | Authorize peers to run commands on your node, and running commands on them.               |
 | [csvexportpays][csvexportpays]     | A plugin that exports all payments to a CSV file                                          |
-| [currencyrate][currencyrate]      | A plugin to convert other currencies to BTC using web requests
+| [currencyrate][currencyrate]       | A plugin to convert other currencies to BTC using web requests                            |
 | [donations][donations]             | A simple donations page to accept donations from the web                                  |
 | [drain][drain]                     | Draining, filling and balancing channels with automatic chunks.                           |
 | [event-websocket][event-websocket] | Exposes notifications over a Websocket                                                    |
 | [feeadjuster][feeadjuster]         | Dynamic fees to keep your channels more balanced                                          |
+| [go-lnmetrics.reporter][reporter]  | Collect and report of the lightning node metrics                                          |
 | [graphql][graphql]                 | Exposes the c-lightning API over [graphql][graphql-spec]                                  |
 | [invoice-queue][invoice-queue]     | Listen to lightning invoices from multiple nodes and send to a redis queue for processing |
 | [lightning-qt][lightning-qt]       | A bitcoin-qt-like GUI for lightningd                                                      |
+| [listmempoolfunds][listmempoolfunds] | Track unconfirmed wallet deposits|
 | [monitor][monitor]                 | helps you analyze the health of your peers and channels                                   |
+| [noise][noise]                     | Chat with your fellow node operators                                                      |
 | [persistent-channels][pers-chans]  | Maintains a number of channels to peers                                                   |
 | [probe][probe]                     | Regularly probes the network for stability                                                |
 | [prometheus][prometheus]           | Lightning node exporter for the prometheus timeseries server                              |
 | [pruning][pruning]                 | This plugin manages pruning of bitcoind such that it can always sync                      |
 | [rebalance][rebalance]             | Keeps your channels balanced                                                              |
 | [reckless][reckless]               | An **experimental** plugin manager (search/install plugins)                               |
-| [requestinvoice][request-invoice]  | Http server to request invoices                                            |
+| [requestinvoice][request-invoice]  | Http server to request invoices                                                           |
 | [sauron][sauron]                   | A Bitcoin backend relying on [Esplora][esplora]'s API                                     |
 | [sitzprobe][sitzprobe]             | A Lightning Network payment rehearsal utility                                             |
 | [sparko][sparko]                   | RPC over HTTP with fine-grained permissions, SSE and spark-wallet support                 |
@@ -161,10 +167,12 @@ Python plugins developers must ensure their plugin to work with all Python versi
  - [Go Plugin API & RPC Client][go-api] by @niftynei
  - [C++ Plugin API & RPC Client][cpp-api] by @darosior
  - [Javascript Plugin API & RPC Client][js-api] by @darosior
+ - [Java Plugin API & RPC Client][java-api] by @vincenzopalazzo
 
 [esplora]: https://github.com/Blockstream/esplora
 [pers-chans]: https://github.com/lightningd/plugins/tree/master/persistent-channels
 [probe]: https://github.com/lightningd/plugins/tree/master/probe
+[noise]: https://github.com/lightningd/plugins/tree/master/noise
 [prometheus]: https://github.com/lightningd/plugins/tree/master/prometheus
 [summary]: https://github.com/lightningd/plugins/tree/master/summary
 [donations]: https://github.com/lightningd/plugins/tree/master/donations
@@ -181,6 +189,7 @@ Python plugins developers must ensure their plugin to work with all Python versi
 [graphql]: https://github.com/nettijoe96/c-lightning-graphql
 [graphql-spec]: https://graphql.org/
 [lightning-qt]: https://github.com/darosior/pylightning-qt
+[listmempoolfunds]: https://github.com/andrewtoth/listmempoolfunds
 [cpp-api]: https://github.com/darosior/lightningcpp
 [js-api]: https://github.com/lightningd/clightningjs
 [monitor]: https://github.com/renepickhardt/plugins/tree/master/monitor
@@ -200,3 +209,8 @@ Python plugins developers must ensure their plugin to work with all Python versi
 [boltz]: https://github.com/BoltzExchange/channel-creation-plugin
 [feeadjuster]: https://github.com/lightningd/plugins/tree/master/feeadjuster
 [teos-client]: https://github.com/talaia-labs/python-teos/tree/master/watchtower-plugin
+[java-api]: https://github.com/clightning4j/JRPClightning
+[btcli4j]: https://github.com/clightning4j/btcli4j 
+[backup]: https://github.com/lightningd/plugins/tree/master/backup
+[commando]: https://github.com/lightningd/plugins/tree/master/commando
+[reporter]: https://github.com/LNOpenMetrics/go-lnmetrics.reporter

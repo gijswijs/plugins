@@ -3,13 +3,12 @@ from flaky import flaky
 from pprint import pprint
 from pyln.client import RpcError
 from pyln.testing.fixtures import *  # noqa: F401,F403
-from pyln.testing.utils import wait_for
+from pyln.testing.utils import DEVELOPER, wait_for
 import hashlib
 import os
 import pytest
 import unittest
 import zbase32
-
 
 plugin = os.path.join(os.path.dirname(__file__), 'noise.py')
 
@@ -25,7 +24,7 @@ def test_sendmsg_success(node_factory, executor):
     m1 = recv.result(10)
 
     # This one should get the same result:
-    m2 = l3.rpc.recvmsg(last_id=-1)
+    m2 = l3.rpc.recvmsg(msg_id=-1)
     # They should be the same :-)
     assert(m1 == m2)
 
@@ -35,6 +34,7 @@ def test_sendmsg_success(node_factory, executor):
 
 @flaky  # since we cannot force a payment to take a specific route
 @unittest.skipIf(not DEVELOPER, "Fails often")
+@unittest.skipIf(True, "Just not stable")
 def test_sendmsg_retry(node_factory, executor):
     """Fail a sendmsg using a cheap route, and check that it retries.
 
@@ -84,7 +84,7 @@ def test_sendmsg_retry(node_factory, executor):
     assert(sres['attempt'] == 2)
     pprint(sres)
 
-    l4.rpc.recvmsg(last_id=-1)
+    l4.rpc.recvmsg(msg_id=-1)
 
 
 def test_zbase32():
@@ -103,7 +103,7 @@ def test_msg_and_keysend(node_factory, executor):
     assert(l3.rpc.listpeers()['peers'][0]['channels'][0]['msatoshi_to_us'] == 0)
 
     l1.rpc.sendmsg(l3.info['id'], "Hello world!", amt)
-    m = l3.rpc.recvmsg(last_id=-1)
+    m = l3.rpc.recvmsg(msg_id=-1)
 
     assert(m['sender'] == l1.info['id'])
     assert(m['verified'] is True)
@@ -133,12 +133,56 @@ def test_forward_ok(node_factory, executor):
     m1 = recv.result(10)
 
     # This one should get the same result:
-    m2 = l3.rpc.recvmsg(last_id=-1)
+    m2 = l3.rpc.recvmsg(msg_id=-1)
     # They should be the same :-)
     assert(m1 == m2)
 
     assert(m2['sender'] == l1.info['id'])
     assert(m2['verified'] is True)
+
+
+def test_read_tip(node_factory, executor):
+    """Testcase for issue #331  https://github.com/lightningd/plugins/issues/331
+
+    We try to read the topmost message by its ID.
+    """
+    opts = [{'plugin': plugin}] * 3
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True, opts=opts)
+
+    l1.rpc.sendmsg(l3.info['id'], "test 1")
+    msg = executor.submit(l3.rpc.recvmsg, 0).result(10)
+    assert msg.get('body') == "test 1"
+
+
+def test_read_order(node_factory, executor):
+    """ A testcase that sends and reads several times and checks correct order.
+    """
+    opts = [{'plugin': plugin}] * 3
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True, opts=opts)
+
+    # send a bunch at once
+    l1.rpc.sendmsg(l3.info['id'], "test 0")
+    l1.rpc.sendmsg(l3.info['id'], "test 1")
+    l1.rpc.sendmsg(l3.info['id'], "test 2")
+
+    # check them all by using `msg_id`
+    assert executor.submit(l3.rpc.recvmsg, 0).result(10).get('id') == 0
+    assert executor.submit(l3.rpc.recvmsg, 0).result(10).get('body') == "test 0"
+    assert executor.submit(l3.rpc.recvmsg, 1).result(10).get('id') == 1
+    assert executor.submit(l3.rpc.recvmsg, 1).result(10).get('body') == "test 1"
+    assert executor.submit(l3.rpc.recvmsg, 2).result(10).get('id') == 2
+    assert executor.submit(l3.rpc.recvmsg, 2).result(10).get('body') == "test 2"
+
+    # now async by waiting on a future to get a message with most recent 'id'
+    recv = executor.submit(l3.rpc.recvmsg)
+    l1.rpc.sendmsg(l3.info['id'], "test 3")
+    result = recv.result(10)
+    assert result.get('id') == 3
+    assert result.get('body') == "test 3"
+
+    # peak the same `msg_id` := 3
+    assert executor.submit(l3.rpc.recvmsg, 3).result(10).get('id') == 3
+    assert executor.submit(l3.rpc.recvmsg, 3).result(10).get('body') == "test 3"
 
 
 def test_missing_tlv_fields(node_factory):

@@ -8,11 +8,24 @@ import unittest
 import pytest
 
 
-pluginopt = {'plugin': os.path.join(os.path.dirname(__file__), "drain.py")}
+plugin_path = os.path.join(os.path.dirname(__file__), "drain.py")
+pluginopt = {'plugin': plugin_path}
 EXPERIMENTAL_FEATURES = int(os.environ.get("EXPERIMENTAL_FEATURES", "0"))
 
 
-@flaky
+def test_plugin_starts(node_factory):
+    l1 = node_factory.get_node()
+    # Test dynamically
+    l1.rpc.plugin_start(plugin_path)
+    l1.rpc.plugin_stop(plugin_path)
+    l1.rpc.plugin_start(plugin_path)
+    l1.stop()
+    # Then statically
+    l1.daemon.opts["plugin"] = plugin_path
+    l1.start()
+
+
+@unittest.skipIf(True, "This test was broken by an upstream commit")
 @unittest.skipIf(not DEVELOPER, "slow gossip, needs DEVELOPER=1")
 def test_drain_and_refill(node_factory, bitcoind):
     # Scenario: first drain then refill
@@ -36,7 +49,10 @@ def test_drain_and_refill(node_factory, bitcoind):
 
     # disable fees to make circular line graph tests a lot easier
     for n in nodes:
-        n.rpc.setchannelfee('all', 0, 0)
+        try:
+            n.rpc.setchannel('all', 0, 0)
+        except RpcError:  # retry with deprecated command name
+            n.rpc.setchannelfee('all', 0, 0)
 
     # wait for each others gossip
     bitcoind.generate_block(6)
@@ -86,7 +102,10 @@ def test_fill_and_drain(node_factory, bitcoind):
 
     # disable fees to make circular line graph tests a lot easier
     for n in nodes:
-        n.rpc.setchannelfee('all', 0, 0)
+        try:
+            n.rpc.setchannel('all', 0, 0)
+        except RpcError:  # retry with deprecated command name
+            n.rpc.setchannelfee('all', 0, 0)
 
     # wait for each others gossip
     bitcoind.generate_block(6)

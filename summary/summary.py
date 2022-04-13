@@ -8,6 +8,10 @@ import requests
 import shelve
 import threading
 import time
+import os
+import glob
+import sys
+
 
 plugin = Plugin(autopatch=True)
 
@@ -20,7 +24,7 @@ try:
 except Exception:
     pass
 
-Channel = namedtuple('Channel', ['total', 'ours', 'theirs', 'pid', 'private', 'connected', 'scid', 'avail'])
+Channel = namedtuple('Channel', ['total', 'ours', 'theirs', 'pid', 'private', 'connected', 'scid', 'avail', 'base', 'permil'])
 Charset = namedtuple('Charset', ['double_left', 'left', 'bar', 'mid', 'right', 'double_right', 'empty'])
 if have_utf8:
     draw = Charset('╟', '├', '─', '┼', '┤', '╢', '║')
@@ -46,6 +50,8 @@ class PeerThread(threading.Thread):
                 rpcpeers = plugin.rpc.listpeers()
                 trace_availability(plugin, rpcpeers)
                 plugin.persist.sync()
+                plugin.log("[PeerThread] Peerstate availability persisted and "
+                           "synced. Sleeping now...", 'debug')
                 time.sleep(plugin.avail_interval)
             except Exception as ex:
                 plugin.log("[PeerThread] " + str(ex), 'warn')
@@ -83,7 +89,7 @@ def to_fiatstr(msat: Millisatoshi):
 # appends an output table header that explains fields and capacity
 def append_header(table, max_msat):
     short_str = Millisatoshi(max_msat).to_approx_str()
-    table.append("%c%-13sOUT/OURS %c IN/THEIRS%12s%c SCID           FLAG AVAIL ALIAS"
+    table.append("%c%-13sOUT/OURS %c IN/THEIRS%12s%c SCID           FLAG   BASE PERMIL AVAIL  ALIAS"
                  % (draw.left, short_str, draw.mid, short_str, draw.right))
 
 
@@ -150,7 +156,9 @@ def summary(plugin, exclude=''):
                 c['private'],
                 p['connected'],
                 c['short_channel_id'],
-                plugin.persist['peerstate'][pid]['avail']
+                plugin.persist['peerstate'][pid]['avail'],
+                c['fee_base_msat'],
+                c['fee_proportional_millionths'],
             ))
 
         if not active_channel and p['connected']:
@@ -209,6 +217,10 @@ def summary(plugin, exclude=''):
                 extra += '_'
             s += '[{}] '.format(extra)
 
+            # append fees
+            s += ' {:5}'.format(c.base.millisatoshis)
+            s += ' {:6}  '.format(c.permil)
+
             # append 24hr availability
             s += '{:4.0%}  '.format(c.avail)
 
@@ -225,6 +237,55 @@ def summary(plugin, exclude=''):
     return reply
 
 
+def init_db(plugin, retry_time=4, sleep_time=1):
+    """
+    On some os we receive some error of type [Errno 79] Inappropriate file type or format: 'summary.dat.db'
+    With this function we retry the call to open db 4 time, and if the last time we obtain an error
+    We will remove the database and recreate a new one.
+    """
+    db = None
+    retry = 0
+    while (db is None and retry < retry_time):
+        try:
+            db = shelve.open('summary.dat', writeback=True)
+        except IOError as ex:
+            plugin.log("Error during db initialization: {}".format(ex))
+            time.sleep(sleep_time)
+            if retry == retry_time - 2:
+                plugin.log("As last attempt we try to delete the db.")
+                # In case we can not access to the file
+                # we can safely delete the db and recreate a new one
+                #
+                # From this reference https://stackoverflow.com/a/16231228/10854225
+                # the file can have different extension and depends from the os target
+                # in this way we say to remove any file that start with summary.dat*
+                # FIXME: There is better option to obtain the same result
+                for db_file in glob.glob(os.path.join(".", "summary.dat*")):
+                    os.remove(db_file)
+        retry += 1
+
+    if db is None:
+        raise RuntimeError("db initialization error")
+    return db
+
+
+def close_db(plugin) -> bool:
+    """
+    This method contains the logic to close the database
+    and print some error message that can happen.
+    """
+    if plugin.persist is not None:
+        try:
+            plugin.persist.close()
+            plugin.log("Database sync and closed with success")
+        except ValueError as ex:
+            plugin.log("An exception occurs during the db closing operation with the following message: {}".format(ex))
+            return False
+    else:
+        plugin.log("There is no db opened for the plugin")
+    return True
+
+
 @plugin.init()
 def init(options, configuration, plugin):
     plugin.currency = options['summary-currency']
@@ -233,10 +294,14 @@ def init(options, configuration, plugin):
 
     plugin.avail_interval = float(options['summary-availability-interval'])
     plugin.avail_window = 60 * 60 * int(options['summary-availability-window'])
-    plugin.persist = shelve.open('summary.dat', writeback=True)
+    plugin.persist = init_db(plugin)
     if 'peerstate' not in plugin.persist:
+        plugin.log("Creating a new summary.dat shelve", 'debug')
         plugin.persist['peerstate'] = {}
         plugin.persist['availcount'] = 0
+    else:
+        plugin.log(f"Reopened summary.dat shelve with {plugin.persist['availcount']} "
+                   f"runs and {len(plugin.persist['peerstate'])} entries", 'debug')
 
     info = plugin.rpc.getinfo()
     config = plugin.rpc.listconfigs()
@@ -271,6 +336,13 @@ def init(options, configuration, plugin):
         plugin.my_address = None
 
     plugin.log("Plugin summary.py initialized")
+
+
+@plugin.subscribe("shutdown")
+def on_rpc_command_callback(plugin, **kwargs):
+    plugin.log("Closing db before lightnind exit")
+    close_db(plugin)
+    sys.exit()
 
 
 plugin.add_option(
