@@ -2,3 +2,12 @@ __pycache__
 .coverage
 .mypy_cache
 report-*.xml
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
