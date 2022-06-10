@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "cln-backup"
+version = "0.1.0"
+description = "Keep your Core-Lightning node save by backing it up, in real-time (allows recovering without channel closures)."
+authors = ["Christian Decker <decker@blockstream.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+pyln-client = "0.10.1"
+click = "^8.0.4"
+tqdm = "^4.62.3"
+psutil = "5.7.0"
+
+[tool.poetry.dev-dependencies]
+pyln-testing = "0.10.1"
+flaky = "^3.7.0"
+MarkupSafe = "2.0.1"
+Flask = "1.1.0"
+itsdangerous = "1.1.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
