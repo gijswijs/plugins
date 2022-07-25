@@ -3,6 +3,7 @@ from pyln.testing.utils import wait_for, DEVELOPER
 from pyln.client import Millisatoshi
 import os
 import unittest
+import logging
 
 currdir = os.path.dirname(__file__)
 plugin = os.path.join(currdir, 'bda.py')
@@ -13,6 +14,7 @@ def test_network(node_factory):
     """
     """
     m, _, _, _ = setup_network(node_factory)
+    logging.info("TEST NETWORK STARTED")
     assert m.info["alias"] == "mallory"
 
 @unittest.skipIf(not DEVELOPER, "gossip is too slow if we're not in developer mode")

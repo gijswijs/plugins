@@ -1,8 +1,7 @@
-import struct
-from binascii import hexlify, unhexlify
-from io import SEEK_CUR, BytesIO
-
 from primitives import varint_decode, varint_encode
+from io import BytesIO, SEEK_CUR
+from binascii import hexlify, unhexlify
+import struct
 
 
 class OnionPayload(object):
@@ -233,6 +232,4 @@ tlv_types = {
     2: (Tu64Field, 'amt_to_forward'),
     4: (Tu32Field, 'outgoing_cltv_value'),
     6: (ShortChannelIdField, 'short_channel_id'),
-    34349334: (TextField, 'noise_message_body'),
-    34349336: (SignatureField, 'noise_message_signature'),
 }
