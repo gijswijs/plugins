@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-import logging
-import threading
-from math import ceil
+# import logging
+# import threading
+# from math import ceil
 
-from pyln.client import Millisatoshi, Plugin, RpcError
+from pyln.client import Plugin
 
 from onion import OnionPayload, TlvPayload
 from primitives import ShortChannelId

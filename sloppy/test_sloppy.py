@@ -21,7 +21,7 @@ def test_plugin_feature_announce(node_factory):
     The plugin registers an individual featurebit for `init` in:
      - 1 << 201 for `init` messages
     """
-    a, b = node_factory.line_graph(
+    a, _ = node_factory.line_graph(
         2, opts=[{'plugin': plugin, 'log-level': 'io'}, {}],
         wait_for_announce=True
     )   
@@ -109,6 +109,7 @@ def test_bob_sloppy_plugin_runs(simple_network):
 @pytest.fixture
 def simple_network(node_factory: NodeFactory):
     """Simple network that allows for two routes from m to l2
+    Alice and Bob run the sloppy plugin
 
     M ---- A --- B --- D
            |    /
