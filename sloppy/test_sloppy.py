@@ -58,27 +58,31 @@ def test_bob_sloppy_plugin_runs(simple_network):
 
     # Dave creates an invoice that Mallory pays
 
+    amt = Millisatoshi(50000)
+
     inv = d.rpc.invoice(
-        50000,
+        amt.millisatoshis,
         "test", "test"
     )
 
-    try:
-        m.rpc.pay(inv['bolt11'])
-        m.wait_for_htlcs()
-    except:
-        pass
+
+    m.rpc.pay(inv['bolt11'])
+    m.wait_for_htlcs()
+
+    logging.info(m.rpc.listpays(inv['bolt11']))
+    
+    assert m.rpc.listpays(inv['bolt11'])['pays'][0]['status'] == 'complete'
 
     # Both Alice and Bob should have a message in their logs about an HTLC,
     # since they both run the plugin
 
-    r_a = re.compile('.*Adjusted payload.*')
+    r_a = re.compile('.*plugin-sloppy.py:*')
     filtered_a = list(filter(r_a.match, a.daemon.logs))
-    logging.info('log entries Alice: {}'.format(filtered_a))
+    logging.info('log entries Alice: {}'.format("\n".join(filtered_a)))
 
-    r_b = re.compile('.*Received message about split payment.*')
+    r_b = re.compile('.*plugin-sloppy.py:*')
     filtered_b = list(filter(r_b.match, b.daemon.logs))
-    logging.info('log entries Bob: {}'.format(filtered_b))
+    logging.info('log entries Bob: {}'.format("\n".join(filtered_b)))
 
     assert(a.daemon.is_in_log(
         r'Adjusted payload'
