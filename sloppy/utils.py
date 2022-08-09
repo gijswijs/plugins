@@ -1,5 +1,5 @@
 import bitstring
-from pyln.client import Millisatoshi
+from pyln.client import Millisatoshi, RpcError
 from pyln.testing.utils import (DEPRECATED_APIS, DEVELOPER,  # noqa: F401
                                 EXPERIMENTAL_DUAL_FUND, env, wait_for)
 

@@ -3,7 +3,7 @@
 
 import threading
 
-from pyln.client import Plugin
+from pyln.client import Plugin, RpcError
 
 from onion import OnionPayload, TlvPayload
 from primitives import ShortChannelId
@@ -37,11 +37,20 @@ def forward_payment(onion, pid, phash, request):
     fhop = {"id": pid,
             "amount_msat": onion['forward_amount'],
             "delay": onion['outgoing_cltv_value']}
-    plugin.rpc.sendonion(onion['next_onion'], fhop, phash)
-    rvalue = plugin.rpc.waitsendpay(phash)
-    plugin.log("sendonion RPC call returned: {}".format(rvalue))
-    request.set_result({"result": "resolve",
-                        "payment_key": rvalue['payment_preimage']})
+    try:
+        plugin.rpc.sendonion(onion['next_onion'], fhop, phash)
+        rval = plugin.rpc.waitsendpay(phash)
+        if (rval.get("status") == "complete"):
+            plugin.log(
+                "Succesfully forwarded payment with payment_hash {}".format(phash))
+            request.set_result({"result": "resolve",
+                                "payment_key": rval['payment_preimage']})
+    except RpcError as e:
+        error = e.error['data']
+        plugin.log('Failed forwarded payment with error {}'.format(e))
+        plugin.log('Error onion {}'.format(error['onionreply']))
+        request.set_result({"result": "fail",
+                            "failure_onion": error['onionreply']})
 
 
 @plugin.async_hook('custommsg')

@@ -2,12 +2,14 @@
 import logging
 import os
 import unittest
+import secrets
+import hashlib
 
 from pyln.testing.fixtures import *  # noqa: F401, F403
 from pyln.testing.utils import NodeFactory
 
 from utils import (DEPRECATED_APIS, DEVELOPER, Millisatoshi,
-                   expected_peer_features, wait_for)
+                   expected_peer_features, RpcError)
 
 currdir = os.path.dirname(__file__)
 plugin = os.path.join(currdir, 'sloppy.py')
@@ -51,7 +53,7 @@ def test_network(simple_network):
 @unittest.skipIf(
     not DEVELOPER or DEPRECATED_APIS, "needs LIGHTNINGD_DEV_LOG_IO and new API"
 )
-def test_bob_sloppy_plugin_runs(simple_network):
+def test_forward_payment_success(simple_network):
     """
     """
     m, a, b, _, d = simple_network
@@ -91,24 +93,31 @@ def test_bob_sloppy_plugin_runs(simple_network):
     assert(b.daemon.is_in_log(
         r'Received message about split payment'
     ))
-    # funds_start = m.rpc.listfunds()
 
-    # balance_start = sum([int(x["channel_sat"]) for x in funds_start["channels"]])
-    # amt = Millisatoshi(50000)
-    
-    # # Mallory (m) pays Bob (l2)
-    # inv = l2.rpc.invoice(
-    #     amt.millisatoshis,
-    #     "test", "test"
-    # )
-    # m.rpc.pay(inv['bolt11'])
-    # m.wait_for_htlcs()
+@unittest.skipIf(
+    not DEVELOPER or DEPRECATED_APIS, "needs LIGHTNINGD_DEV_LOG_IO and new API"
+)
+def test_forward_payment_failure(simple_network):
+    """
+    """
+    m, a, b, _, d = simple_network
 
-    # funds_end = m.rpc.listfunds()
+    # Create a random payment hash
+    pkey = secrets.token_bytes(32)
+    phash = hashlib.sha256(pkey).hexdigest()
 
-    # balance_end = sum([int(x["channel_sat"]) for x in funds_end["channels"]])
+    amt = Millisatoshi(50000)
 
-    # assert balance_end <= balance_start - amt.to_satoshi()
+    route = m.rpc.getroute(d.info['id'], amt.millisatoshis, 0)["route"]
+    try:
+        m.rpc.sendpay(route, phash, msatoshi=amt)
+        logging.info("WaitSendPay: {}".format(m.rpc.waitsendpay(phash)))
+    except RpcError as e:
+        logging.info("WaitSendPay ERROR: {}".format(e))
+        assert(e.error['data']['failcodename'] == 'WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS')
+        return
+
+    pytest.fail("This payment should not succeed.")
 
 @pytest.fixture
 def simple_network(node_factory: NodeFactory):
