@@ -10,12 +10,14 @@ from pyln.client import Plugin, RpcError, Millisatoshi
 from onion import OnionPayload, TlvPayload
 from primitives import ShortChannelId
 
+MSGTYPE_SPLIT_PAYMENT_ANNOUNCE = 44203
+MSGTYPE_SPLIT_PAYMENT_FAIL = 44205
+SLOPPY_FEATURE = 201
+
 plugin = Plugin(
     dynamic=False,
-    init_features=1 << 201,
+    init_features=1 << SLOPPY_FEATURE,
 )
-
-MSGTYPE_SPLIT_PAYMENT = 44203
 
 
 def get_peer_and_channel(peers, scid):
@@ -29,6 +31,7 @@ def get_peer_and_channel(peers, scid):
 
 
 def send_msg(peer_id, msgtype, contents):
+    plugin.log('Send_msg with peer {}, msgtype {} and contents {}'.format(peer_id, msgtype, contents))
     msg = (msgtype.to_bytes(2, 'big')
            + bytes(contents, encoding='utf8'))
     plugin.rpc.sendcustommsg(peer_id, msg.hex())
@@ -42,54 +45,53 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
         "{scid}/{direction}".format(scid=scid, direction=chan['direction'])
     ]
 
-    # FIXME: We should NOT be sending it here. We should only send it IF we have found an alternative route.
     plugin.log("Relay original payment partially with full onion.")
     request.set_result(
         {"payload": payload, "result": "continue"})
 
     # Try as many routes as possible before the timeout expires
-    # stop_time = int(time.time()) + plugin.try_timeout
-    # while int(time.time()) <= stop_time:
-    plugin.log("Search for alternative route")
-    route = get_alternative_route(amt, peer, exclusions)
-    # We exhausted all the possibilities, Game Over
-    if route is None:
-        plugin.log("No alternative round found.")
-        request.set_result({"result": "fail",
-                            "failure_message": "4002"})
-        return
+    stop_time = int(time.time()) + plugin.try_timeout
+    while int(time.time()) <= stop_time:
+        plugin.log("Search for alternative route")
+        route = get_alternative_route(amt, peer, exclusions)
+        # We exhausted all the possibilities, Game Over
+        if route is None:
+            plugin.log("No alternative round found.")
+            # We have already send the first partial payment with the original
+            # onion. Our peer is waiting for the additional payments, but none
+            # will come. We should inform our peer to fail the first partial
+            # payment.
+            # send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_FAIL, phash)
+            plugin.log("Going to send MSGTYPE_SPLIT_PAYMENT_FAIL to peer {}, for phash {}".format(peer['id'], phash))
+            send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_FAIL, phash)
+            return
 
-    plugin.log("Sending partial payment relay using payment_hash={}, route={}".format(
-        phash, route
-    ))
-    try:
-        plugin.rpc.sendpay(route, phash)
-        payment_result = plugin.rpc.waitsendpay(phash)
-        if (payment_result.get("status")
-                == "complete"):
-            plugin.log("Succesfully split payment relay for channel {},"
-                       "payment result {}".format(scid, payment_result))
-    except RpcError as e:
-        error = e.error['data']
-        plugin.log("Received error while finding alternative route {}"
-                   .format(error))
-        # The erring_channel field can not be present (shouldn't happen) or
-        # can be "0x0x0"
-        # FIXME: We shouldn't retry if this is because of the original payment failing.
-        erring_channel = error.get('erring_channel', '0x0x0')
-        if erring_channel != '0x0x0':
-            erring_direction = error['erring_direction']
-            exclusions.append("{}/{}".format(erring_channel,
-                                             erring_direction))
-            plugin.log("Excluding {} due to a failed attempt"
-                       .format(erring_channel))
-
-    # plugin.log("Timed out while trying to split a payment relay")
-    # request.set_result({"result": "continue"})
-    # plugin.log("Alternative route finding timed out.")
-    # request.set_result({"result": "fail",
-    #                     "failure_message": "4002"})
-
+        plugin.log("Sending partial payment relay using payment_hash={}, route={}".format(
+            phash, route
+        ))
+        try:
+            plugin.rpc.sendpay(route, phash, groupid=2)
+            rval = plugin.rpc.waitsendpay(phash)
+            if (rval.get("status")
+                    == "complete"):
+                request.set_result({"result": "resolve",
+                                    "payment_key": rval['payment_preimage']})
+                plugin.log("Succesfully split payment relay for channel {},"
+                           "payment result {}".format(scid, rval))
+        except RpcError as e:
+            error = e.error.get('data', e.error)
+            plugin.log("Received error while finding alternative route {}"
+                       .format(error))
+            # The erring_channel field can not be present (shouldn't happen) or
+            # can be "0x0x0"
+            # FIXME: We shouldn't retry if this is because of the original payment failing.
+            erring_channel = error.get('erring_channel', '0x0x0')
+            if erring_channel != '0x0x0':
+                erring_direction = error['erring_direction']
+                exclusions.append("{}/{}".format(erring_channel,
+                                                 erring_direction))
+                plugin.log("Excluding {} due to a failed attempt"
+                           .format(erring_channel))
 
 def forward_payment(pid, phash):
     plugin.log("Forward payment with sendonion RPC call")
@@ -119,7 +121,10 @@ def forward_payment(pid, phash):
                                                          "failure_onion": error['onionreply']})
         for request in plugin.splits[phash]['additional_payments']:
             request.set_result({"result": "fail",
-                                "failure_message": "4002"})
+                                "failure_message": "2002"})
+
+    # We are done with this payment (It either failed or succeeded), so we can remove it from the set of split payments.
+    plugin.splits.pop(phash)
 
 
 def collect_parts(onion, htlc, request):
@@ -149,7 +154,7 @@ def collect_parts(onion, htlc, request):
         # BOLT #7 requires fee >= fee_base_msat + ( amount_to_forward * fee_proportional_millionths / 1000000 )
         famt = Millisatoshi(onion['forward_amount'])
         fee += math.ceil((famt.millisatoshis *
-                            chan['fee_proportional_millionths']) // 10**6)
+                          chan['fee_proportional_millionths']) // 10**6)
 
         plugin.splits[phash]['total_expected'] = famt.millisatoshis + \
             fee.millisatoshis
@@ -163,25 +168,43 @@ def collect_parts(onion, htlc, request):
     if ('total_expected' in plugin.splits[phash]) and (plugin.splits[phash]['total_received'] >= plugin.splits[phash]['total_expected']):
         plugin.log("We have received enough money!")
         peers = plugin.rpc.listpeers()['peers']
-        peer, _ = get_peer_and_channel(peers, plugin.splits[phash]['onion']['short_channel_id'])
+        peer, _ = get_peer_and_channel(
+            peers, plugin.splits[phash]['onion']['short_channel_id'])
         t = threading.Thread(target=forward_payment, args=(
             peer['id'], phash))
         t.daemon = True
         t.start()
+
 
 @plugin.async_hook('custommsg')
 def on_custommsg(peer_id, payload, plugin, request, **kwargs):
     pbytes = bytes.fromhex(payload)
     mtype = int.from_bytes(pbytes[:2], "big")
     data = pbytes[2:]
+    phash = data.decode('ascii')
 
-    if mtype == MSGTYPE_SPLIT_PAYMENT:
+    if mtype == MSGTYPE_SPLIT_PAYMENT_ANNOUNCE:
         plugin.log("Received message about split payment to be received with payment hash {}".format(
-            data.decode('ascii')))
+            phash))
         # Create an empty set for collecting the partial payments, keyed by the payment hash.
-        plugin.splits[data.decode('ascii')] = {
+        plugin.splits[phash] = {
+            "peer_id": peer_id,
             "additional_payments": list()
         }
+    if mtype == MSGTYPE_SPLIT_PAYMENT_FAIL:
+        plugin.log("Received MSGTYPE_SPLIT_PAYMENT_FAIL")
+        # We only fail splits if we know about them and the message comes from the same peer
+        if phash in plugin.splits and plugin.splits[phash]['peer_id'] == peer_id:
+            # We only fail splits that are still being collected. If we already have received all parts we just handle it normally.
+            total_received = plugin.splits[phash].get('total_received', 0)
+            if ('total_expected' not in plugin.splits[phash]) or (total_received < plugin.splits[phash]['total_expected']):
+                if 'main_payment' in plugin.splits[phash]:
+                    plugin.splits[phash]['main_payment'].set_result({"result": "fail",
+                                                                     "failure_message": "2002"})
+                for req in plugin.splits[phash]['additional_payments']:
+                    req.set_result({"result": "fail",
+                                    "failure_message": "2002"})
+                plugin.splits.pop(data.decode('ascii'))
 
     request.set_result({"result": "continue"})
 
@@ -209,17 +232,13 @@ def get_alternative_route(amt, peer, exclusions):
 @plugin.async_hook("htlc_accepted")
 def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     plugin.log("Got an incoming HTLC htlc={}, onion={}".format(htlc, onion))
-
     # The HTLC might be a split payment we expect to receive
     split = plugin.splits.get(htlc['payment_hash'], None)
     if split is not None:
         plugin.log(
             "We expected this payment and will collect all partial payments and try to relay with `sendonion` (We are Bob)")
         # We will collect all parts of the split, relayed payment.
-        t1 = threading.Thread(target=collect_parts,
-                              args=(onion, htlc, request))
-        t1.daemon = True
-        t1.start()
+        collect_parts(onion, htlc, request)
         return
 
     # Check to see if the next channel has sufficient capacity
@@ -247,6 +266,15 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     # Check if the channel is active and routable, otherwise there's little
     # point in even trying
     if not peer['connected'] or chan['state'] != "CHANNELD_NORMAL":
+        request.set_result({"result": "continue"})
+        return
+
+    plugin.log("Peer {} node supports these features: {}".format(
+        peer['id'], peer['features']))
+    # Check if the peer supports sloppy routing
+    if not int(peer['features'], 16) & (1 << SLOPPY_FEATURE):
+        plugin.log("Peer {} node doesn't support sloppy routing. Features: {}".format(
+            peer['id'], peer['features']))
         request.set_result({"result": "continue"})
         return
 
@@ -279,7 +307,7 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     plugin.log(
         "We will forward 'spendable_msat' and complement it with additional payments (We are Alice)")
 
-    adjusted_amt = chan['spendable_msat']
+    adjusted_amt = Millisatoshi(chan['spendable_msat'])
 
     if adjusted_amt == 0:
         plugin.log("spendable_msat is 0, there is nothing to split.")
@@ -294,19 +322,15 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
     adjusted_payload.add_field(4, payload.get(4).value)
     adjusted_payload.add_field(6, payload.get(6).value)
 
-    send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT, htlc['payment_hash'])
+    send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_ANNOUNCE, htlc['payment_hash'])
 
-    additional_amt = fwd_amt - chan['spendable_msat']
+    additional_amt = fwd_amt - adjusted_amt
     payload = adjusted_payload.to_hex()[2:]
 
     t2 = threading.Thread(target=try_splitting, args=(
         scid, chan, additional_amt, peer, htlc['payment_hash'], request, payload))
     t2.daemon = True
     t2.start()
-
-    # FIXME: We should only forward a partial payment if we know there is an alternative route.
-    # request.set_result(
-    #     {"payload": adjusted_payload.to_hex()[2:], "result": "continue"})
 
 
 @plugin.init()
