@@ -56,12 +56,11 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
         route = get_alternative_route(amt, peer, exclusions)
         # We exhausted all the possibilities, Game Over
         if route is None:
-            plugin.log("No alternative round found.")
+            plugin.log("No alternative route found.")
             # We have already send the first partial payment with the original
             # onion. Our peer is waiting for the additional payments, but none
             # will come. We should inform our peer to fail the first partial
             # payment.
-            # send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_FAIL, phash)
             plugin.log("Going to send MSGTYPE_SPLIT_PAYMENT_FAIL to peer {}, for phash {}".format(peer['id'], phash))
             send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_FAIL, phash)
             return
@@ -79,15 +78,18 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
                 plugin.log("Succesfully split payment relay for channel {},"
                            "payment result {}".format(scid, rval))
         except RpcError as e:
-            error = e.error.get('data', e.error)
+            data = e.error.get('data', '')
             plugin.log("Received error while finding alternative route {}"
-                       .format(error))
+                       .format(e))
             # The erring_channel field can not be present (shouldn't happen) or
             # can be "0x0x0"
-            # FIXME: We shouldn't retry if this is because of the original payment failing.
-            erring_channel = error.get('erring_channel', '0x0x0')
+            if data['raw_message'] == '4002':
+                # This error code means the main payment has failed. No use in searching for alternative routes.
+                plugin.log("Apparently main payment has failed, quit searching for alternative routes")
+                return
+            erring_channel = data.get('erring_channel', '0x0x0')
             if erring_channel != '0x0x0':
-                erring_direction = error['erring_direction']
+                erring_direction = data['erring_direction']
                 exclusions.append("{}/{}".format(erring_channel,
                                                  erring_direction))
                 plugin.log("Excluding {} due to a failed attempt"
@@ -120,8 +122,9 @@ def forward_payment(pid, phash):
         plugin.splits[phash]['main_payment'].set_result({"result": "fail",
                                                          "failure_onion": error['onionreply']})
         for request in plugin.splits[phash]['additional_payments']:
+            # PERM|2 is not used, if we receive this failure message we can assume it is because of the main payment failing.
             request.set_result({"result": "fail",
-                                "failure_message": "2002"})
+                                "failure_message": "4002"})
 
     # We are done with this payment (It either failed or succeeded), so we can remove it from the set of split payments.
     plugin.splits.pop(phash)
@@ -303,9 +306,6 @@ def on_htlc_accepted(htlc, onion, plugin, request, **kwargs):
                onion['outgoing_cltv_value'], scid))
 
     adjusted_payload = TlvPayload()
-
-    plugin.log(
-        "We will forward 'spendable_msat' and complement it with additional payments (We are Alice)")
 
     adjusted_amt = Millisatoshi(chan['spendable_msat'])
 

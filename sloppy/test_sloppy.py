@@ -67,16 +67,16 @@ def test_forward_payment_success(simple_network):
     # Rebalance channel A-B so that it doesn't have zero funds in the A->B direction but not enough to relay the payment
     rebalance(a, b, (amt/5)*2)
 
-    # Rebalance channel B-C so that it does have enough funds to relay the payment in the C->B direction.
-    rebalance(c, b, amt*2)
+    # Rebalance channel B-C so that it doesn't have enough funds to relay the payment in the C->B direction, but enough combined with A->B. 
+    rebalance(c, b, (amt/5)*3 + 1)
 
     # Rebalance channel D-B so that it does have enough funds to relay the payment in the B->D direction.
-    rebalance(b, d, amt*2)
+    rebalance(b, d, amt)
 
     # Dave creates an invoice that Mallory pays
 
     inv = d.rpc.invoice(
-        amt.millisatoshis,
+        amt,
         "test", "test"
     )
 
@@ -115,28 +115,14 @@ def test_forward_payment_success(simple_network):
 @unittest.skipIf(
     not DEVELOPER or DEPRECATED_APIS, "needs LIGHTNINGD_DEV_LOG_IO and new API"
 )
-def test_fail_alternative_route(simple_network):
+def test_fail_alternative_route_at_CB(simple_network):
+    """A->B doesn't have enough funds for relaying the payment from M->A->B->D.
+    Alice and Bob both run the plugin, so Alice will start searching for an
+    alternative route to split the relaying. But there is no alternative
+    route to be found, since C->B doesn't have enough funds. Alice should
+    message Bob that the funds won't arrive, and that he should fail the
+    payment.
     """
-    """
-    # m, a, b, _, d = simple_network
-
-    # # Create a random payment hash
-    # pkey = secrets.token_bytes(32)
-    # phash = hashlib.sha256(pkey).hexdigest()
-
-    # amt = Millisatoshi(50000)
-
-    # route = m.rpc.getroute(d.info['id'], amt.millisatoshis, 0)["route"]
-    # try:
-    #     m.rpc.sendpay(route, phash, msatoshi=amt)
-    #     logging.info("WaitSendPay: {}".format(m.rpc.waitsendpay(phash)))
-    # except RpcError as e:
-    #     logging.info("WaitSendPay ERROR: {}".format(e))
-    #     assert(e.error['data']['failcodename'] ==
-    #            'WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS')
-    #     return
-
-    # pytest.fail("This payment should not succeed.")
     m, a, b, _, d = simple_network
 
     amt = Millisatoshi(50000)
@@ -160,6 +146,51 @@ def test_fail_alternative_route(simple_network):
         m.rpc.pay(inv['bolt11'])
     except RpcError as e:
         assert "Ran out of routes to try after 2 attempts" in e.error['message']
+
+    # Show messages in the log from the sloppy plugin
+
+    show_logs(a, 'plugin-sloppy.py:')
+    show_logs(b, 'plugin-sloppy.py:')
+
+@unittest.skipIf(
+    not DEVELOPER or DEPRECATED_APIS, "needs LIGHTNINGD_DEV_LOG_IO and new API"
+)
+def test_fail_main_route_at_BD(simple_network):
+    """Fail original route at the last hop. This can only happen after a
+    succesful split relay for which Bob has received all parts. Bob will now
+    have to fail all parts.
+    """
+    m, a, b, c, d = simple_network
+
+    amt = Millisatoshi(50000)
+
+    # Rebalance channel A-B so that it doesn't have zero funds in the A->B direction but not enough to relay the payment
+    rebalance(a, b, (amt/5)*2)
+
+    # Rebalance channel D-B so that it does have enough funds to relay the payment in the B->D direction.
+    rebalance(b, d, amt*2)
+
+    # Rebalance channel B-C so that it doesn't have enough funds to relay the payment in the C->B direction, but enough combined with A->B. 
+    rebalance(c, b, (amt/5)*3 + 1)
+
+    # Create a random payment hash
+    pkey = secrets.token_bytes(32)
+    phash = hashlib.sha256(pkey).hexdigest()
+
+    # Exclude channel A->C so that `getroute` is forced to return route M->A->B->D
+    chan = a.rpc.listpeers(c.info['id'])[
+        'peers'][0]['channels'][0]
+    exclusions = [
+        "{scid}/{direction}".format(scid=chan['short_channel_id'], direction=chan['direction'])
+    ]
+    route = m.rpc.getroute(d.info['id'], amt, riskfactor=0, exclude=exclusions)["route"]
+    try:
+        m.rpc.sendpay(route, phash, msatoshi=amt)
+        logging.info("WaitSendPay: {}".format(m.rpc.waitsendpay(phash)))
+    except RpcError as e:
+        logging.info("WaitSendPay ERROR: {}".format(e))
+        assert(e.error['data']['failcodename'] ==
+               'WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS')
 
     # Show messages in the log from the sloppy plugin
 
