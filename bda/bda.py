@@ -147,20 +147,23 @@ def balance_attack(src, dest):
         amt = (max + min) // 2
         payment_key = secrets.token_bytes(32)
         payment_hash = hashlib.sha256(payment_key).hexdigest()
-        route = plugin.rpc.getfixedroute([plugin.our_node_id, channel["source"], channel["destination"],] , int(amt))["route"]
         try:
+            route = plugin.rpc.getfixedroute([plugin.our_node_id, channel["source"], channel["destination"],] , int(amt))["route"]
             plugin.rpc.sendpay(route, payment_hash, msatoshi=amt)
-            plugin.log("WaitSendPay: {}".format(plugin.rpc.waitsendpay(payment_hash)))
+            plugin.log("WaitSendPay: {}".format(plugin.rpc.waitsendpay(payment_hash, 10)))
         except RpcError as e:
             error = e.error['data']
+            plugin.log('Error received during bda: {}'.format(error))
             if error["failcodename"] == "WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS":
                 if min < amt:
                     min = amt
-            if error["failcodename"] == "WIRE_TEMPORARY_CHANNEL_FAILURE":
+            # if error["failcodename"] == "WIRE_TEMPORARY_CHANNEL_FAILURE":
+            else:
                 if max > amt:
                     max = amt
         if (max - min <= accuracy_threshold):
             keepGoing = False
+    
     left = (capacity * 0.01) + min
     right = capacity - left
     return left, right
