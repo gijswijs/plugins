@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # from math import ceil
 
+import hashlib
+import math
 import threading
 import time
-import math
 
-from pyln.client import Plugin, RpcError, Millisatoshi
+from pyln.client import Millisatoshi, Plugin, RpcError
 
 from onion import OnionPayload, TlvPayload
 from primitives import ShortChannelId
@@ -31,7 +32,8 @@ def get_peer_and_channel(peers, scid):
 
 
 def send_msg(peer_id, msgtype, contents):
-    plugin.log('Send_msg with peer {}, msgtype {} and contents {}'.format(peer_id, msgtype, contents))
+    plugin.log('Send_msg with peer {}, msgtype {} and contents {}'.format(
+        peer_id, msgtype, contents))
     msg = (msgtype.to_bytes(2, 'big')
            + bytes(contents, encoding='utf8'))
     plugin.rpc.sendcustommsg(peer_id, msg.hex())
@@ -46,8 +48,7 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
     ]
 
     plugin.log("Relay original payment partially with full onion.")
-    request.set_result(
-        {"payload": payload, "result": "continue"})
+    request.set_result({"payload": payload, "result": "continue"})
 
     # Try as many routes as possible before the timeout expires
     stop_time = int(time.time()) + plugin.try_timeout
@@ -61,7 +62,8 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
             # onion. Our peer is waiting for the additional payments, but none
             # will come. We should inform our peer to fail the first partial
             # payment.
-            plugin.log("Going to send MSGTYPE_SPLIT_PAYMENT_FAIL to peer {}, for phash {}".format(peer['id'], phash))
+            plugin.log("Going to send MSGTYPE_SPLIT_PAYMENT_FAIL to peer {}, for phash {}".format(
+                peer['id'], phash))
             send_msg(peer['id'], MSGTYPE_SPLIT_PAYMENT_FAIL, phash)
             return
 
@@ -85,7 +87,8 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
             # can be "0x0x0"
             if data['raw_message'] == '4002':
                 # This error code means the main payment has failed. No use in searching for alternative routes.
-                plugin.log("Apparently main payment has failed, quit searching for alternative routes")
+                plugin.log(
+                    "Apparently main payment has failed, quit searching for alternative routes")
                 return
             erring_channel = data.get('erring_channel', '0x0x0')
             if erring_channel != '0x0x0':
@@ -94,6 +97,7 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
                                                  erring_direction))
                 plugin.log("Excluding {} due to a failed attempt"
                            .format(erring_channel))
+
 
 def forward_payment(pid, phash):
     plugin.log("Forward payment with sendonion RPC call")
@@ -140,27 +144,31 @@ def collect_parts(onion, htlc, request):
     total += amt.millisatoshis
     plugin.splits[phash]['total_received'] = total
 
+    famt = Millisatoshi(onion['forward_amount'])
+
     # # stop_time = int(time.time()) + 20
     # # while int(time.time()) <= stop_time:
     # # Does this part contain the relay information?
-    if 'short_channel_id' in onion:
+    if amt < famt:
         # This is the original payment with the rest of the route in the onion.
         # We will calculate the amount we want to receive based on the channel
         # fee setting.
 
-        # Find the peer and channel that is next in path based on scid
-        peers = plugin.rpc.listpeers()['peers']
-        peer, chan = get_peer_and_channel(peers, onion['short_channel_id'])
+        plugin.splits[phash]['total_expected'] = famt.millisatoshis
 
-        # Calculate the fee we charge
-        fee = Millisatoshi(chan['fee_base_msat'])
-        # BOLT #7 requires fee >= fee_base_msat + ( amount_to_forward * fee_proportional_millionths / 1000000 )
-        famt = Millisatoshi(onion['forward_amount'])
-        fee += math.ceil((famt.millisatoshis *
-                          chan['fee_proportional_millionths']) // 10**6)
+        if 'short_channel_id' in onion:
+            # We are *not* the recipient of this payment, so we need to take into account the fees that we expect to be receiving
+            # Find the peer and channel that is next in path based on scid
+            peers = plugin.rpc.listpeers()['peers']
+            peer, chan = get_peer_and_channel(peers, onion['short_channel_id'])
 
-        plugin.splits[phash]['total_expected'] = famt.millisatoshis + \
-            fee.millisatoshis
+            # Calculate the fee we charge
+            fee = Millisatoshi(chan['fee_base_msat'])
+            # BOLT #7 requires fee >= fee_base_msat + ( amount_to_forward * fee_proportional_millionths / 1000000 )
+            fee += math.ceil((famt.millisatoshis *
+                            chan['fee_proportional_millionths']) // 10**6)
+            plugin.splits[phash]['total_expected'] += fee.millisatoshis
+
         plugin.splits[phash]['onion'] = onion
         plugin.splits[phash]['main_payment'] = request
     else:
@@ -171,13 +179,37 @@ def collect_parts(onion, htlc, request):
     if ('total_expected' in plugin.splits[phash]) and (plugin.splits[phash]['total_received'] >= plugin.splits[phash]['total_expected']):
         plugin.log("We have received enough money!")
         peers = plugin.rpc.listpeers()['peers']
-        peer, _ = get_peer_and_channel(
-            peers, plugin.splits[phash]['onion']['short_channel_id'])
-        t = threading.Thread(target=forward_payment, args=(
+        if 'short_channel_id' in plugin.splits[phash]['onion']:
+            peer, _ = get_peer_and_channel(
+                peers, plugin.splits[phash]['onion']['short_channel_id'])
+            t = threading.Thread(target=forward_payment, args=(
             peer['id'], phash))
-        t.daemon = True
-        t.start()
+            t.daemon = True
+            t.start()
+        else:
+            plugin.log(
+                "Succesfully received payment with payment_hash {}".format(phash))
+            if phash in plugin.preimages:
+                plugin.splits[phash]['main_payment'].set_result({"result": "resolve",
+                                                                "payment_key": plugin.preimages[phash]})
+                for request in plugin.splits[phash]['additional_payments']:
+                    request.set_result({"result": "resolve",
+                                        "payment_key": plugin.preimages[phash]})
+            else:
+                failure_code = 0x400f
+                blockheight = plugin.rpc.getinfo()['blockheight']
+                failure_message = failure_code << 96 | plugin.splits[phash]['total_received'] << 32 | blockheight
+                plugin.log("Returning error with failure_code {}, blockheight {}, failure_message {}".format(failure_code, blockheight, f'{failure_message:x}'))
+                plugin.splits[phash]['main_payment'].set_result({"result": "fail", "failure_message": f'{failure_message:x}'})
+                for request in plugin.splits[phash]['additional_payments']:
+                    request.set_result({"result": "continue"})
+        
 
+@plugin.subscribe('invoice_creation')
+def on_invoice_creation(plugin, invoice_creation, **kwargs):
+    phash = hashlib.sha256(bytearray.fromhex(invoice_creation['preimage'])).hexdigest()
+    plugin.log("invoice created {}, payment_hash {}".format(invoice_creation, phash))
+    plugin.preimages[phash] = invoice_creation['preimage']
 
 @plugin.async_hook('custommsg')
 def on_custommsg(peer_id, payload, plugin, request, **kwargs):
@@ -343,8 +375,8 @@ def init(options, configuration, plugin: Plugin):
     # Set of split payments to receive
     plugin.splits = {}
 
-    # Set of split payments send by us
-    plugin.splits_sent = {}
+    # Set of preimages of invoices created by us
+    plugin.preimages = {}
 
 
 plugin.add_option(
