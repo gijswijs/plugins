@@ -71,7 +71,7 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
             phash, route
         ))
         try:
-            plugin.rpc.sendpay(route, phash, groupid=2)
+            plugin.rpc.sendpay(route, phash)
             rval = plugin.rpc.waitsendpay(phash)
             if (rval.get("status")
                     == "complete"):
@@ -85,7 +85,7 @@ def try_splitting(scid, chan, amt, peer, phash, request, payload):
                        .format(e))
             # The erring_channel field can not be present (shouldn't happen) or
             # can be "0x0x0"
-            if data['raw_message'] == '4002':
+            if data.get('raw_message','') == '4002':
                 # This error code means the main payment has failed. No use in searching for alternative routes.
                 plugin.log(
                     "Apparently main payment has failed, quit searching for alternative routes")
